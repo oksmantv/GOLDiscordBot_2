@@ -26,13 +26,7 @@ class ScheduleUpdateService:
             message = await channel.fetch_message(message_id)
         except Exception:
             return False
-        # Fetch all events in the next 8 weeks
-        today = date.today()
-        start_date = today - discord.utils.timedelta(weeks=4)
-        end_date = today + discord.utils.timedelta(weeks=4)
-        events = await event_repository.get_events_by_guild_and_date_range(
-            channel.guild.id, start_date, end_date
-        )
-        embed = await build_schedule_embed(events, last_updated=date.today())
+        # Update the schedule embed for this guild
+        embed = await build_schedule_embed(channel.guild)
         await message.edit(embed=embed)
         return True

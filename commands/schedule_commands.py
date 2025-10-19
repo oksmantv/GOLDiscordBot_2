@@ -83,7 +83,7 @@ class ScheduleCommands(commands.Cog):
                     if channel:
                         try:
                             msg = await channel.fetch_message(config["message_id"])
-                            embed = await build_schedule_embed()
+                            embed = await build_schedule_embed(interaction.guild)
                             await msg.edit(embed=embed)
                         except Exception as e:
                             await interaction.followup.send(f"Event updated, but failed to update schedule message: {e}", ephemeral=True)

@@ -6,7 +6,9 @@ from services import event_repository
 from services.schedule_config_repository import schedule_config_repository
 import difflib
 
-async def build_schedule_embed():
+async def build_schedule_embed(guild):
+    import logging
+    logger = logging.getLogger("schedule_embed_service")
     today = date.today()
     now_local = datetime.now()
     start_date = today - timedelta(weeks=2)
@@ -77,9 +79,20 @@ async def build_schedule_embed():
     week_keys = sorted(week_groups.keys())
     # For month labeling
     last_month = None
-    # Calculate current week range
+    # Calculate current week range with custom cutoff: Sunday 20:00 UTC
+    from datetime import timezone, time as dtime
+    now_utc = datetime.utcnow().replace(tzinfo=timezone.utc)
+    # Find the most recent Monday
     week_start = today - timedelta(days=today.weekday())
-    week_end = week_start + timedelta(days=6)
+    # Find the next Sunday
+    week_end_date = week_start + timedelta(days=6)
+    # Set cutoff to Sunday 20:00 UTC
+    week_end_cutoff = datetime.combine(week_end_date, dtime(hour=20, minute=0, tzinfo=timezone.utc))
+    # If now is after the cutoff, move to next week
+    if now_utc > week_end_cutoff:
+        week_start = week_start + timedelta(days=7)
+        week_end_date = week_start + timedelta(days=6)
+        week_end_cutoff = datetime.combine(week_end_date, dtime(hour=20, minute=0, tzinfo=timezone.utc))
     for week_start_dt in week_keys:
         week_events = week_groups[week_start_dt]
         week_num = week_start_dt.isocalendar()[1]
@@ -92,14 +105,29 @@ async def build_schedule_embed():
             day = ordinal(event.date.day)
             month_full = event.date.strftime('%B')
             weekday = event.date.weekday()
-            event_str = f"{icon} {event.name or 'N/A'} by {event.creator_name or 'N/A'}"
-            # Bold if event is in current week
-            if week_start <= event.date <= week_end:
+            # Try to find a matching briefing post link
+            briefing_link = None
+            if briefing_channel_id and event.name:
+                from services.schedule_embed_service import find_briefing_post_link
+                try:
+                    briefing_link = await find_briefing_post_link(guild, briefing_channel_id, event.name, min_ratio=0.8)
+                    logger.info(f"[BRIEFING LINK] Event: '{event.name}' | Link: {briefing_link}")
+                except Exception as e:
+                    logger.warning(f"[BRIEFING LINK ERROR] Event: '{event.name}' | Error: {e}")
+            # Format event name as a link if briefing_link is found
+            if briefing_link:
+                event_name_display = f"[{event.name}]({briefing_link})"
+            else:
+                event_name_display = event.name or 'N/A'
+            event_str = f"{icon} {event_name_display} by {event.creator_name or 'N/A'}"
+            # Bold if event is in current week (before Sunday 20:00 UTC cutoff)
+            event_datetime_utc = datetime.combine(event.date, dtime.min, tzinfo=timezone.utc)
+            if week_start <= event.date <= week_end_date and event_datetime_utc <= week_end_cutoff:
                 event_str = f"**{event_str}**"
             # Add marker only above first Thursday Training or Sunday Mission, with date
             if weekday == 3 and event.type == 'Training' and not added_thursday:
                 marker = f"Thursday {day} {month_full}"
-                if week_start <= event.date <= week_end:
+                if week_start <= event.date <= week_end_date and event_datetime_utc <= week_end_cutoff:
                     marker = f"**{marker}**"
                 week_lines.append(marker)
                 added_thursday = True
@@ -108,7 +136,7 @@ async def build_schedule_embed():
                 if added_thursday:
                     week_lines.append('\u200b')
                 marker = f"Sunday {day} {month_full}"
-                if week_start <= event.date <= week_end:
+                if week_start <= event.date <= week_end_date and event_datetime_utc <= week_end_cutoff:
                     marker = f"**{marker}**"
                 week_lines.append(marker)
                 added_sunday = True
@@ -132,14 +160,21 @@ async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_rat
     if not forum_channel or forum_channel.type != discord.ChannelType.forum:
         return None
     # Fetch all threads (posts) in the forum
-    threads = await forum_channel.threads() if hasattr(forum_channel, 'threads') else []
+    threads = []
+    if hasattr(forum_channel, 'threads'):
+        # In discord.py, threads is a property (list), not a coroutine
+        threads = forum_channel.threads or []
     if not threads:
         # fallback for discord.py <2.3: use active_threads + archived_threads
-        threads = []
         if hasattr(forum_channel, 'active_threads'):
             threads += await forum_channel.active_threads()
         if hasattr(forum_channel, 'archived_threads'):
-            threads += await forum_channel.archived_threads().flatten()
+            archived = await forum_channel.archived_threads()
+            # archived_threads() may return a flattened list or a manager with flatten()
+            if hasattr(archived, 'flatten'):
+                threads += await archived.flatten()
+            else:
+                threads += archived
     # Fuzzy match
     best_match = None
     best_ratio = 0
@@ -149,6 +184,6 @@ async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_rat
             best_match = thread
             best_ratio = ratio
     if best_match:
-        # Discord thread URL: https://discord.com/channels/{guild_id}/{forum_channel_id}/{thread.id}
-        return f"https://discord.com/channels/{guild.id}/{forum_channel_id}/{best_match.id}"
+        # For forum posts, the correct link is /channels/{guild_id}/{thread.id}
+        return f"https://discord.com/channels/{guild.id}/{best_match.id}"
     return None

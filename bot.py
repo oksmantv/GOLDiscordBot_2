@@ -83,7 +83,7 @@ class GOLBot(commands.Bot):
                 if channel:
                     try:
                         msg = await channel.fetch_message(config["message_id"])
-                        embed = await build_schedule_embed()
+                        embed = await build_schedule_embed(guild)
                         await msg.edit(embed=embed)
                         logger.info(f"Updated schedule message for guild {guild.name}")
                     except Exception as e:
