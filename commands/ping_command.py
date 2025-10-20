@@ -1,11 +1,13 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
+from config import Config
 
 class PingCommand(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    @app_commands.guilds(Config.GUILD_ID)
     @app_commands.command(name="ping", description="Test if the bot is responsive and show version.")
     async def ping(self, interaction: discord.Interaction):
         from config import Config

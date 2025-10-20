@@ -14,7 +14,8 @@ A Discord bot for managing weekly training and mission schedules using NeonDB ba
 
 ```
 GOLDiscordBot_2/
-├── bot.py                          # Main bot entry point
+├── start.py                        # Entry point for hosting platforms
+├── bot.py                          # Main bot implementation
 ├── requirements.txt                # Python dependencies
 ├── .env.example                    # Environment variables template
 ├── config/
@@ -89,7 +90,9 @@ CREATE INDEX idx_events_guild_date ON events (guild_id, date);
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the bot
+# Run the bot (either method works)
+python start.py
+# OR
 python bot.py
 ```
 
@@ -103,31 +106,53 @@ python bot.py
 
 ### Deployment Steps
 
-1. **Prepare Files**:
-   - Create `.env` file with your credentials (do NOT include in git)
-   - Upload all project files to fps.ms file manager
+#### Option A: Using Environment Variables (Recommended)
 
-2. **Install Dependencies**:
+1. **Prepare Files**:
+   - Upload all project files to fps.ms file manager
+   - Do NOT upload `.env` file to maintain security
+
+2. **Set Environment Variables in fps.ms Panel**:
+   - Navigate to your fps.ms environment settings
+   - Add the following variables:
+     ```
+     DISCORD_BOT_TOKEN=your_actual_bot_token
+     GUILD_ID=your_discord_server_id
+     NEONDB_CONNECTION_STRING=your_actual_database_connection
+     ```
+
+3. **Install Dependencies**:
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Environment Variables**:
-   - Set environment variables in fps.ms panel or include `.env` file
-   - Required variables:
-     - `DISCORD_BOT_TOKEN`
-     - `GUILD_ID`  
-     - `NEONDB_CONNECTION_STRING`
-
 4. **Run Command**:
    ```bash
-   python bot.py
+   python start.py
    ```
 
-5. **Verification**:
-   - Check bot appears online in Discord
-   - Test `/schedule` command in your server
-   - Verify events are auto-populated
+#### Option B: Production Configuration (If env vars not supported)
+
+1. **IMPORTANT**: Only use this method if fps.ms doesn't support environment variables
+2. **WARNING**: Only do this deployment from a PRIVATE repository
+
+3. **Configure Production Settings**:
+   - Edit `config/settings.py`
+   - Uncomment the `get_production_config()` method
+   - Replace placeholder values with your actual credentials
+   - Uncomment the call to `cls.get_production_config()` in `validate_config()`
+
+4. **Deploy**:
+   ```bash
+   pip install -r requirements.txt
+   python start.py
+   ```
+
+### Verification
+
+- Check bot appears online in Discord
+- Test `/schedule` command in your server
+- Verify events are auto-populated
 
 ### Security Notes
 

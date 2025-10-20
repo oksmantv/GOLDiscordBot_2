@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from typing import Optional
+from config import Config
 from models import Event
 from services import event_repository, date_filter_service
 
@@ -11,6 +12,7 @@ class ScheduleCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
     
+    @app_commands.guilds(Config.GUILD_ID)
     @app_commands.command(name="schedule", description="Update event details in the schedule")
     @app_commands.describe(
         event="Select an event to update",

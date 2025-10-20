@@ -2,6 +2,7 @@ print('[DEBUG] minimal_configure_cog.py imported')
 import discord
 from discord.ext import commands
 from discord import app_commands
+from config import Config
 
 class MinimalConfigureCog(commands.Cog):
     def __init__(self, bot):
@@ -19,7 +20,7 @@ class MinimalConfigureCog(commands.Cog):
         # message_id="Test message ID",
         # briefing_channel_id="Test briefing channel ID"
     )
-    @app_commands.guilds(discord.Object(id=437979456196444161))
+    @app_commands.guilds(discord.Object(id=Config.GUILD_ID))
     async def configure(
         self,
         interaction: discord.Interaction,

@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from typing import Optional
+from config import Config
 from services.schedule_config_repository import schedule_config_repository
 
 class ConfigureCommand(commands.Cog):
@@ -17,7 +18,7 @@ class ConfigureCommand(commands.Cog):
         except Exception as e:
             print(f"[DEBUG] Error printing commands in ConfigureCommand: {e}")
 
-    @app_commands.guilds(437979456196444161)  # Replace with your test guild ID
+    @app_commands.guilds(Config.GUILD_ID)
     @app_commands.command(name="configure", description="Configure schedule channel, message, and briefing forum channel.")
     @app_commands.describe(
         channel_id="Select the channel for schedule updates",
