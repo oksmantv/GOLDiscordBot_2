@@ -185,5 +185,5 @@ async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_rat
             best_ratio = ratio
     if best_match:
         # For forum posts, the correct link is /channels/{guild_id}/{thread.id}
-        return f"https://discord.com/channels/{guild.id}/{best_match.id}"
+            return f"https://discord.com/channels/{guild.id}/{best_match.id}"
     return None

@@ -85,9 +85,9 @@ class DateFilterService:
         # Format: "Thursday Training - 24/10/25" or "Sunday Mission - 27/10/25"
         day_name = event.date.strftime('%A')
         date_str = event.date.strftime('%d/%m/%y')
-        
-        if event.name.strip():
-            return f"{day_name} {event.type} - {date_str} ({event.name[:20]}{'...' if len(event.name) > 20 else ''})"
+        name = event.name if event.name is not None else ""
+        if name.strip():
+            return f"{day_name} {event.type} - {date_str} ({name[:20]}{'...' if len(name) > 20 else ''})"
         else:
             return f"{day_name} {event.type} - {date_str}"
     
@@ -95,10 +95,10 @@ class DateFilterService:
         """Format event for general display."""
         day_name = event.date.strftime('%A')
         date_str = event.date.strftime('%d/%m/%Y')
-        
-        if event.name.strip():
+        name = event.name if event.name is not None else ""
+        if name.strip():
             creator_info = f" (by {event.creator_name})" if event.creator_name else ""
-            return f"**{day_name} {event.type}** - {date_str}\n{event.name}{creator_info}"
+            return f"**{day_name} {event.type}** - {date_str}\n{name}{creator_info}"
         else:
             return f"**{day_name} {event.type}** - {date_str}\n*No details set*"
     
