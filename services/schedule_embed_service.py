@@ -34,10 +34,10 @@ async def build_schedule_embed(guild):
     year = today.year
     GOL_ICON = "<:GOL:985630086487228527>"
     header = (
-        f"Current Event Rotation: {year}\n"
-        f":pen_fountain: Editors: {editors_str}\n"
-        f":repeat: Instructors: {instructors_str}\n"
-        f"{GOL_ICON} Use Command /schedule to update or view the schedule.\n"
+        f"# Current Event Rotation: {year}"
+        f"## :pen_fountain: Editors: {editors_str}"
+        f"## :repeat: Instructors: {instructors_str}"
+        f"### {GOL_ICON} Use Command /schedule to update or view the schedule.\n"
         "Here you can now find the mission schedule, we will try as best as possible to announce ahead of time with at least the basic information about the mission. "
         "You can find briefings in #⁠mission-briefings, but here you can see the schedule."
     )
