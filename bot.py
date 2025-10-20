@@ -62,6 +62,10 @@ class GOLBot(commands.Bot):
             # Print all app commands before syncing
             logger.info(f"App commands before sync: {[cmd.name for cmd in self.tree.get_commands()]} (total: {len(self.tree.get_commands())})")
 
+            # Clear any global commands to prevent duplicates
+            self.tree.clear_commands(guild=None)
+            global_synced = await self.tree.sync(guild=None)
+            logger.info(f"Cleared {len(global_synced)} global commands to prevent duplicates.")
 
             # Sync commands to test guild for instant update ONLY
             test_guild_id = int(Config.GUILD_ID)
