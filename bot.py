@@ -62,16 +62,22 @@ class GOLBot(commands.Bot):
             # Print all app commands before syncing
             logger.info(f"App commands before sync: {[cmd.name for cmd in self.tree.get_commands()]} (total: {len(self.tree.get_commands())})")
 
-            # Clear any global commands to prevent duplicates
+            # AGGRESSIVE CLEANUP: Clear all commands everywhere to fix duplicates
+            # Step 1: Clear global commands
             self.tree.clear_commands(guild=None)
-            global_synced = await self.tree.sync(guild=None)
-            logger.info(f"Cleared {len(global_synced)} global commands to prevent duplicates.")
-
-            # Sync commands to test guild for instant update ONLY
+            await self.tree.sync()  # Sync globally to remove all global commands
+            logger.info("Cleared all global commands.")
+            
+            # Step 2: Clear guild commands and resync
             test_guild_id = int(Config.GUILD_ID)
             guild_obj = discord.Object(id=test_guild_id)
+            self.tree.clear_commands(guild=guild_obj)
+            await self.tree.sync(guild=guild_obj)  # Clear guild commands first
+            logger.info(f"Cleared all commands from guild {test_guild_id}.")
+            
+            # Step 3: Now sync the guild commands properly
             guild_synced = await self.tree.sync(guild=guild_obj)
-            logger.info(f"Synced {len(guild_synced)} commands to guild {test_guild_id} (instant update).")
+            logger.info(f"Synced {len(guild_synced)} commands to guild {test_guild_id}.")
 
         except Exception as e:
             logger.error(f"Error during setup: {e}")
