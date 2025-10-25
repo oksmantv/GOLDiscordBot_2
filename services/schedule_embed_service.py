@@ -110,7 +110,7 @@ async def build_schedule_embed(guild):
             if briefing_channel_id and event.name:
                 from services.schedule_embed_service import find_briefing_post_link
                 try:
-                    briefing_link = await find_briefing_post_link(guild, briefing_channel_id, event.name, min_ratio=0.4)
+                    briefing_link = await find_briefing_post_link(guild, briefing_channel_id, event.name, min_ratio=0.6)
                     logger.info(f"[BRIEFING LINK] Event: '{event.name}' | Link: {briefing_link}")
                 except Exception as e:
                     logger.warning(f"[BRIEFING LINK ERROR] Event: '{event.name}' | Error: {e}")
@@ -151,7 +151,7 @@ async def build_schedule_embed(guild):
     embed.set_footer(text="")
     return embed
 
-async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_ratio=0.4):
+async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_ratio=0.6):
     """
     Search for a forum post (thread) in the given forum_channel_id whose title matches mission_name.
     Uses aggressive matching strategies to maximize success rate.
@@ -200,10 +200,10 @@ async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_rat
     
     # Normalize mission name for better matching
     def normalize_text(text):
-        """Normalize text for aggressive matching"""
+        """Normalize text for matching while preserving key distinguishing words"""
         # Convert to lowercase and strip
         text = text.lower().strip()
-        # Remove common prefixes/suffixes
+        # Remove common prefixes/suffixes but preserve the core operation name
         text = re.sub(r'^(operation|op|mission|briefing|brief)\s*[-:]?\s*', '', text)
         text = re.sub(r'\s*[-:]?\s*(operation|op|mission|briefing|brief)$', '', text)
         # Remove special characters and extra spaces
@@ -212,12 +212,26 @@ async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_rat
         return text.strip()
     
     def extract_keywords(text):
-        """Extract meaningful keywords from text"""
+        """Extract meaningful keywords from text, preserving important distinguishing words"""
         normalized = normalize_text(text)
-        # Split into words and filter out common words
+        # Split into words and filter out common words but keep ALL meaningful words
         words = normalized.split()
-        keywords = [w for w in words if len(w) > 2 and w not in ['the', 'and', 'for', 'with', 'but', 'not']]
+        keywords = [w for w in words if len(w) > 2 and w not in ['the', 'and', 'for', 'with', 'but', 'not', 'are', 'was', 'will']]
         return keywords
+    
+    def has_core_word_match(keywords1, keywords2):
+        """Check if there's at least one significant word match between two keyword sets"""
+        if not keywords1 or not keywords2:
+            return False
+        
+        # For operations, we need at least one core word to match
+        # This prevents "Operation Slingshot" from matching "Operation Golden Ghost"
+        for kw1 in keywords1:
+            for kw2 in keywords2:
+                # Direct match or one contains the other (for abbreviations)
+                if kw1 == kw2 or (len(kw1) >= 4 and kw1 in kw2) or (len(kw2) >= 4 and kw2 in kw1):
+                    return True
+        return False
     
     mission_name_clean = mission_name.lower().strip()
     mission_normalized = normalize_text(mission_name)
@@ -255,40 +269,42 @@ async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_rat
             max_ratio = 0.90
             match_type = "normalized_substring"
             
-        # Strategy 5: All keywords present
-        elif mission_keywords and all(any(kw in tw for tw in thread_keywords) for kw in mission_keywords):
+        # Strategy 5: All keywords present (with core word validation)
+        elif mission_keywords and has_core_word_match(mission_keywords, thread_keywords) and all(any(kw in tw for tw in thread_keywords) for kw in mission_keywords):
             max_ratio = 0.85
             match_type = "all_keywords"
             
-        # Strategy 6: Most keywords present (at least 70%)
-        elif mission_keywords:
+        # Strategy 6: Most keywords present (at least 70%, with core word validation)
+        elif mission_keywords and has_core_word_match(mission_keywords, thread_keywords):
             keyword_matches = sum(1 for kw in mission_keywords if any(kw in tw for tw in thread_keywords))
             keyword_ratio = keyword_matches / len(mission_keywords) if mission_keywords else 0
             if keyword_ratio >= 0.7:
                 max_ratio = 0.70 + (keyword_ratio * 0.15)  # 0.70 to 0.85 range
                 match_type = f"keywords_{keyword_matches}/{len(mission_keywords)}"
         
-        # Strategy 7: Fuzzy matching on original text
+        # Strategy 7: Fuzzy matching on original text (with core word requirement)
         if max_ratio < 0.8:  # Only do expensive fuzzy match if not already good
             fuzzy_ratio = difflib.SequenceMatcher(None, mission_name_clean, thread_name_clean).ratio()
-            if fuzzy_ratio > max_ratio:
+            # Require higher threshold for fuzzy matches and core word match
+            if fuzzy_ratio > max_ratio and fuzzy_ratio >= 0.7 and has_core_word_match(mission_keywords, thread_keywords):
                 max_ratio = fuzzy_ratio
                 match_type = "fuzzy_original"
             
-            # Strategy 8: Fuzzy matching on normalized text
+            # Strategy 8: Fuzzy matching on normalized text (with core word requirement)
             fuzzy_normalized = difflib.SequenceMatcher(None, mission_normalized, thread_normalized).ratio()
-            if fuzzy_normalized > max_ratio:
+            if fuzzy_normalized > max_ratio and fuzzy_normalized >= 0.6 and has_core_word_match(mission_keywords, thread_keywords):
                 max_ratio = fuzzy_normalized
                 match_type = "fuzzy_normalized"
         
-        # Strategy 9: Partial ratio matching (sequences of 3+ chars)
-        if max_ratio < 0.6:
+        # Strategy 9: Partial ratio matching (only for very close matches with core word match)
+        if max_ratio < 0.7 and has_core_word_match(mission_keywords, thread_keywords):
             from difflib import SequenceMatcher
             s = SequenceMatcher(None, mission_normalized, thread_normalized)
             blocks = s.get_matching_blocks()
-            total_match_length = sum(block.size for block in blocks if block.size >= 3)
+            total_match_length = sum(block.size for block in blocks if block.size >= 4)  # Increased to 4+ chars
             partial_ratio = total_match_length / max(len(mission_normalized), len(thread_normalized))
-            if partial_ratio > max_ratio:
+            # Only accept partial matches with high similarity
+            if partial_ratio > max_ratio and partial_ratio >= 0.6:
                 max_ratio = partial_ratio
                 match_type = "partial_blocks"
         
