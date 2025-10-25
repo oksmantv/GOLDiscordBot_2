@@ -110,7 +110,7 @@ async def build_schedule_embed(guild):
             if briefing_channel_id and event.name:
                 from services.schedule_embed_service import find_briefing_post_link
                 try:
-                    briefing_link = await find_briefing_post_link(guild, briefing_channel_id, event.name, min_ratio=0.6)
+                    briefing_link = await find_briefing_post_link(guild, briefing_channel_id, event.name, min_ratio=0.4)
                     logger.info(f"[BRIEFING LINK] Event: '{event.name}' | Link: {briefing_link}")
                 except Exception as e:
                     logger.warning(f"[BRIEFING LINK ERROR] Event: '{event.name}' | Error: {e}")
@@ -151,12 +151,14 @@ async def build_schedule_embed(guild):
     embed.set_footer(text="")
     return embed
 
-async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_ratio=0.6):
+async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_ratio=0.4):
     """
-    Search for a forum post (thread) in the given forum_channel_id whose title matches mission_name with at least min_ratio similarity.
+    Search for a forum post (thread) in the given forum_channel_id whose title matches mission_name.
+    Uses aggressive matching strategies to maximize success rate.
     Returns the Discord message URL if found, else None.
     """
     import logging
+    import re
     logger = logging.getLogger("briefing_link_matcher")
     
     forum_channel = guild.get_channel(forum_channel_id)
@@ -196,43 +198,120 @@ async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_rat
         logger.warning("No threads found in forum channel")
         return None
     
-    # Multiple matching strategies
+    # Normalize mission name for better matching
+    def normalize_text(text):
+        """Normalize text for aggressive matching"""
+        # Convert to lowercase and strip
+        text = text.lower().strip()
+        # Remove common prefixes/suffixes
+        text = re.sub(r'^(operation|op|mission|briefing|brief)\s*[-:]?\s*', '', text)
+        text = re.sub(r'\s*[-:]?\s*(operation|op|mission|briefing|brief)$', '', text)
+        # Remove special characters and extra spaces
+        text = re.sub(r'[^\w\s]', ' ', text)
+        text = re.sub(r'\s+', ' ', text)
+        return text.strip()
+    
+    def extract_keywords(text):
+        """Extract meaningful keywords from text"""
+        normalized = normalize_text(text)
+        # Split into words and filter out common words
+        words = normalized.split()
+        keywords = [w for w in words if len(w) > 2 and w not in ['the', 'and', 'for', 'with', 'but', 'not']]
+        return keywords
+    
     mission_name_clean = mission_name.lower().strip()
+    mission_normalized = normalize_text(mission_name)
+    mission_keywords = extract_keywords(mission_name)
+    
     best_match = None
     best_ratio = 0
     all_matches = []
     
     for thread in threads:
         thread_name_clean = thread.name.lower().strip()
+        thread_normalized = normalize_text(thread.name)
+        thread_keywords = extract_keywords(thread.name)
+        
+        max_ratio = 0
+        match_type = "none"
         
         # Strategy 1: Exact match (case insensitive)
         if mission_name_clean == thread_name_clean:
-            logger.info(f"EXACT MATCH found: '{thread.name}' -> {thread.id}")
-            return f"https://discord.com/channels/{guild.id}/{thread.id}"
+            max_ratio = 1.0
+            match_type = "exact"
+            
+        # Strategy 2: Normalized exact match
+        elif mission_normalized == thread_normalized:
+            max_ratio = 0.98
+            match_type = "normalized_exact"
+            
+        # Strategy 3: Direct substring match
+        elif mission_name_clean in thread_name_clean or thread_name_clean in mission_name_clean:
+            max_ratio = 0.95
+            match_type = "substring"
+            
+        # Strategy 4: Normalized substring match
+        elif mission_normalized in thread_normalized or thread_normalized in mission_normalized:
+            max_ratio = 0.90
+            match_type = "normalized_substring"
+            
+        # Strategy 5: All keywords present
+        elif mission_keywords and all(any(kw in tw for tw in thread_keywords) for kw in mission_keywords):
+            max_ratio = 0.85
+            match_type = "all_keywords"
+            
+        # Strategy 6: Most keywords present (at least 70%)
+        elif mission_keywords:
+            keyword_matches = sum(1 for kw in mission_keywords if any(kw in tw for tw in thread_keywords))
+            keyword_ratio = keyword_matches / len(mission_keywords) if mission_keywords else 0
+            if keyword_ratio >= 0.7:
+                max_ratio = 0.70 + (keyword_ratio * 0.15)  # 0.70 to 0.85 range
+                match_type = f"keywords_{keyword_matches}/{len(mission_keywords)}"
         
-        # Strategy 2: Substring match
-        if mission_name_clean in thread_name_clean or thread_name_clean in mission_name_clean:
-            ratio = 0.95  # High score for substring matches
-        else:
-            # Strategy 3: Fuzzy match using difflib
-            ratio = difflib.SequenceMatcher(None, mission_name_clean, thread_name_clean).ratio()
+        # Strategy 7: Fuzzy matching on original text
+        if max_ratio < 0.8:  # Only do expensive fuzzy match if not already good
+            fuzzy_ratio = difflib.SequenceMatcher(None, mission_name_clean, thread_name_clean).ratio()
+            if fuzzy_ratio > max_ratio:
+                max_ratio = fuzzy_ratio
+                match_type = "fuzzy_original"
+            
+            # Strategy 8: Fuzzy matching on normalized text
+            fuzzy_normalized = difflib.SequenceMatcher(None, mission_normalized, thread_normalized).ratio()
+            if fuzzy_normalized > max_ratio:
+                max_ratio = fuzzy_normalized
+                match_type = "fuzzy_normalized"
         
-        all_matches.append((thread.name, ratio))
+        # Strategy 9: Partial ratio matching (sequences of 3+ chars)
+        if max_ratio < 0.6:
+            from difflib import SequenceMatcher
+            s = SequenceMatcher(None, mission_normalized, thread_normalized)
+            blocks = s.get_matching_blocks()
+            total_match_length = sum(block.size for block in blocks if block.size >= 3)
+            partial_ratio = total_match_length / max(len(mission_normalized), len(thread_normalized))
+            if partial_ratio > max_ratio:
+                max_ratio = partial_ratio
+                match_type = "partial_blocks"
         
-        if ratio > best_ratio and ratio >= min_ratio:
+        all_matches.append((thread.name, max_ratio, match_type))
+        
+        if max_ratio > best_ratio and max_ratio >= min_ratio:
             best_match = thread
-            best_ratio = ratio
-            logger.info(f"Better match found: '{thread.name}' (ratio: {ratio:.3f})")
+            best_ratio = max_ratio
+            logger.info(f"Better match found: '{thread.name}' (ratio: {max_ratio:.3f}, type: {match_type})")
     
     # Log all matches for debugging
     logger.info(f"All thread matches for '{mission_name}':")
     sorted_matches = sorted(all_matches, key=lambda x: x[1], reverse=True)
-    for name, ratio in sorted_matches[:10]:  # Top 10 matches
-        logger.info(f"  - '{name}': {ratio:.3f}")
+    for name, ratio, match_type in sorted_matches[:15]:  # Top 15 matches
+        logger.info(f"  - '{name}': {ratio:.3f} ({match_type})")
     
     if best_match:
         logger.info(f"BEST MATCH: '{best_match.name}' (ratio: {best_ratio:.3f}) -> {best_match.id}")
         return f"https://discord.com/channels/{guild.id}/{best_match.id}"
     else:
         logger.warning(f"No suitable match found for '{mission_name}' (min_ratio: {min_ratio})")
+        # If no match found with current threshold, show the best candidate
+        if sorted_matches:
+            best_candidate = sorted_matches[0]
+            logger.info(f"Best candidate was: '{best_candidate[0]}' with ratio {best_candidate[1]:.3f}")
         return None
