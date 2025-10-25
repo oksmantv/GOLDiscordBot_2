@@ -110,7 +110,7 @@ async def build_schedule_embed(guild):
             if briefing_channel_id and event.name:
                 from services.schedule_embed_service import find_briefing_post_link
                 try:
-                    briefing_link = await find_briefing_post_link(guild, briefing_channel_id, event.name, min_ratio=0.8)
+                    briefing_link = await find_briefing_post_link(guild, briefing_channel_id, event.name, min_ratio=0.6)
                     logger.info(f"[BRIEFING LINK] Event: '{event.name}' | Link: {briefing_link}")
                 except Exception as e:
                     logger.warning(f"[BRIEFING LINK ERROR] Event: '{event.name}' | Error: {e}")
@@ -151,39 +151,88 @@ async def build_schedule_embed(guild):
     embed.set_footer(text="")
     return embed
 
-async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_ratio=0.8):
+async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_ratio=0.6):
     """
     Search for a forum post (thread) in the given forum_channel_id whose title matches mission_name with at least min_ratio similarity.
     Returns the Discord message URL if found, else None.
     """
+    import logging
+    logger = logging.getLogger("briefing_link_matcher")
+    
     forum_channel = guild.get_channel(forum_channel_id)
     if not forum_channel or forum_channel.type != discord.ChannelType.forum:
+        logger.warning(f"Forum channel {forum_channel_id} not found or not a forum channel")
         return None
-    # Fetch all threads (posts) in the forum
+    
+    logger.info(f"Searching for briefing link for mission: '{mission_name}' in forum: {forum_channel.name}")
+    
+    # Fetch all threads (posts) in the forum - improved approach
     threads = []
+    
+    # Method 1: Get threads from forum_channel.threads (active threads)
     if hasattr(forum_channel, 'threads'):
-        # In discord.py, threads is a property (list), not a coroutine
-        threads = forum_channel.threads or []
+        threads.extend(forum_channel.threads or [])
+        logger.info(f"Found {len(threads)} active threads")
+    
+    # Method 2: Fetch archived threads more comprehensively
+    try:
+        # Get public archived threads
+        async for thread in forum_channel.archived_threads(limit=None):
+            threads.append(thread)
+        
+        # Get private archived threads if bot has permission
+        try:
+            async for thread in forum_channel.archived_threads(private=True, limit=None):
+                threads.append(thread)
+        except discord.Forbidden:
+            pass  # Bot doesn't have permission for private threads
+            
+    except Exception as e:
+        logger.warning(f"Error fetching archived threads: {e}")
+    
+    logger.info(f"Total threads found: {len(threads)}")
+    
     if not threads:
-        # fallback for discord.py <2.3: use active_threads + archived_threads
-        if hasattr(forum_channel, 'active_threads'):
-            threads += await forum_channel.active_threads()
-        if hasattr(forum_channel, 'archived_threads'):
-            archived = await forum_channel.archived_threads()
-            # archived_threads() may return a flattened list or a manager with flatten()
-            if hasattr(archived, 'flatten'):
-                threads += await archived.flatten()
-            else:
-                threads += archived
-    # Fuzzy match
+        logger.warning("No threads found in forum channel")
+        return None
+    
+    # Multiple matching strategies
+    mission_name_clean = mission_name.lower().strip()
     best_match = None
     best_ratio = 0
+    all_matches = []
+    
     for thread in threads:
-        ratio = difflib.SequenceMatcher(None, mission_name.lower(), thread.name.lower()).ratio()
+        thread_name_clean = thread.name.lower().strip()
+        
+        # Strategy 1: Exact match (case insensitive)
+        if mission_name_clean == thread_name_clean:
+            logger.info(f"EXACT MATCH found: '{thread.name}' -> {thread.id}")
+            return f"https://discord.com/channels/{guild.id}/{thread.id}"
+        
+        # Strategy 2: Substring match
+        if mission_name_clean in thread_name_clean or thread_name_clean in mission_name_clean:
+            ratio = 0.95  # High score for substring matches
+        else:
+            # Strategy 3: Fuzzy match using difflib
+            ratio = difflib.SequenceMatcher(None, mission_name_clean, thread_name_clean).ratio()
+        
+        all_matches.append((thread.name, ratio))
+        
         if ratio > best_ratio and ratio >= min_ratio:
             best_match = thread
             best_ratio = ratio
+            logger.info(f"Better match found: '{thread.name}' (ratio: {ratio:.3f})")
+    
+    # Log all matches for debugging
+    logger.info(f"All thread matches for '{mission_name}':")
+    sorted_matches = sorted(all_matches, key=lambda x: x[1], reverse=True)
+    for name, ratio in sorted_matches[:10]:  # Top 10 matches
+        logger.info(f"  - '{name}': {ratio:.3f}")
+    
     if best_match:
-        # For forum posts, the correct link is /channels/{guild_id}/{thread.id}
-            return f"https://discord.com/channels/{guild.id}/{best_match.id}"
-    return None
+        logger.info(f"BEST MATCH: '{best_match.name}' (ratio: {best_ratio:.3f}) -> {best_match.id}")
+        return f"https://discord.com/channels/{guild.id}/{best_match.id}"
+    else:
+        logger.warning(f"No suitable match found for '{mission_name}' (min_ratio: {min_ratio})")
+        return None
