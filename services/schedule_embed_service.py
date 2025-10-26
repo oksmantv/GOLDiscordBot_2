@@ -105,13 +105,20 @@ async def build_schedule_embed(guild):
             day = ordinal(event.date.day)
             month_full = event.date.strftime('%B')
             weekday = event.date.weekday()
-            # Try to find a matching briefing post link
+            # Try to find a matching briefing post link with timeout
             briefing_link = None
             if briefing_channel_id and event.name:
                 from services.schedule_embed_service import find_briefing_post_link
+                import asyncio
                 try:
-                    briefing_link = await find_briefing_post_link(guild, briefing_channel_id, event.name, min_ratio=0.6)
+                    # Set a 5-second timeout for briefing link matching
+                    briefing_link = await asyncio.wait_for(
+                        find_briefing_post_link(guild, briefing_channel_id, event.name, min_ratio=0.6),
+                        timeout=5.0
+                    )
                     logger.info(f"[BRIEFING LINK] Event: '{event.name}' | Link: {briefing_link}")
+                except asyncio.TimeoutError:
+                    logger.warning(f"[BRIEFING LINK TIMEOUT] Event: '{event.name}' | Took too long, skipped")
                 except Exception as e:
                     logger.warning(f"[BRIEFING LINK ERROR] Event: '{event.name}' | Error: {e}")
             # Format event name as a link if briefing_link is found
