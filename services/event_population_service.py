@@ -111,8 +111,11 @@ class EventPopulationService:
 
         return await self.populate_events_for_date_range(start_date, end_date)
     
-    async def maintain_event_population(self) -> int:
-        """Maintain event population to always have 8 weeks available."""
+    async def maintain_event_population(self) -> dict:
+        """Maintain event population to always have ~8 weeks available.
+
+        Returns a summary dict with keys: created, skipped, failed, total.
+        """
         today = date.today()
         
         # Check if we have events 4 weeks ahead
@@ -126,8 +129,8 @@ class EventPopulationService:
         # If no events exist 4 weeks ahead, populate new range
         if not existing_events:
             return await self.populate_8_week_range(today)
-        
-        return 0
+
+        return {"created": 0, "skipped": 0, "failed": 0, "total": 0}
 
 # Singleton instance
 event_population_service = EventPopulationService()

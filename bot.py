@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import asyncio
 import logging
 from config import Config
@@ -26,6 +26,26 @@ class GOLBot(commands.Bot):
             help_command=None
         )
 
+        self._background_tasks_started = False
+
+    @tasks.loop(hours=12)
+    async def _event_population_maintenance_loop(self):
+        try:
+            summary = await event_population_service.maintain_event_population()
+            created = summary.get('created', 0) if isinstance(summary, dict) else 0
+            if created:
+                logger.info(
+                    f"Event maintenance populated events: Created={summary.get('created')}, "
+                    f"Skipped={summary.get('skipped')}, Failed={summary.get('failed')}, Total={summary.get('total')}"
+                )
+                await self.update_schedule_message_on_startup()
+        except Exception as e:
+            logger.warning(f"Event maintenance loop failed: {e}")
+
+    @_event_population_maintenance_loop.before_loop
+    async def _before_event_population_maintenance_loop(self):
+        await self.wait_until_ready()
+
     async def setup_hook(self):
         """Called when the bot is starting up."""
         logger.info("Setting up bot...")
@@ -51,6 +71,12 @@ class GOLBot(commands.Bot):
                 f"Total={population_summary['total']}"
             )
 
+            # Start background maintenance tasks once
+            if not self._background_tasks_started:
+                self._event_population_maintenance_loop.start()
+                self._background_tasks_started = True
+                logger.info("Started background event population maintenance loop")
+
             # Load command extensions
             await self.load_extension('commands.schedule_commands')
             logger.info("Loaded schedule_commands Cog")
@@ -58,6 +84,8 @@ class GOLBot(commands.Bot):
             logger.info("Loaded ping_command Cog")
             await self.load_extension('commands.configure_command')
             logger.info("Commands loaded successfully")
+            await self.load_extension('commands.populate_command')
+            logger.info("Loaded populate_command Cog")
 
             # Print all app commands before syncing
             logger.info(f"App commands before sync: {[cmd.name for cmd in self.tree.get_commands()]} (total: {len(self.tree.get_commands())})")

@@ -19,10 +19,26 @@ async def initialize_database():
     CREATE INDEX IF NOT EXISTS idx_events_guild_date 
     ON events (guild_id, date);
     """
+
+    create_schedule_config_table_query = """
+    CREATE TABLE IF NOT EXISTS schedule_config (
+        guild_id BIGINT PRIMARY KEY,
+        channel_id BIGINT NOT NULL,
+        message_id BIGINT NOT NULL,
+        briefing_channel_id BIGINT
+    );
+    """
+
+    ensure_schedule_config_columns_query = """
+    ALTER TABLE schedule_config
+        ADD COLUMN IF NOT EXISTS briefing_channel_id BIGINT;
+    """
     
     try:
         await db_connection.execute_command(create_events_table_query)
         await db_connection.execute_command(create_index_query)
+        await db_connection.execute_command(create_schedule_config_table_query)
+        await db_connection.execute_command(ensure_schedule_config_columns_query)
         print("Database tables initialized successfully")
         return True
     except Exception as e:

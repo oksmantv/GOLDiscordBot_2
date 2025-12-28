@@ -13,10 +13,10 @@ async def build_schedule_embed(guild):
     now_local = datetime.now()
     start_date = today - timedelta(weeks=2)
     end_date = today + timedelta(weeks=4)
-    events = await event_repository.get_events_by_guild_and_date_range(Config.GUILD_ID, start_date, end_date)
+    events = await event_repository.get_events_by_guild_and_date_range(guild.id, start_date, end_date)
 
     # Get config for this guild (for briefing_channel_id)
-    config = await schedule_config_repository.get_config(Config.GUILD_ID)
+    config = await schedule_config_repository.get_config(guild.id)
     briefing_channel_id = config["briefing_channel_id"] if config else None
 
     # Build header
