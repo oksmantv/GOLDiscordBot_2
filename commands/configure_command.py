@@ -23,14 +23,16 @@ class ConfigureCommand(commands.Cog):
     @app_commands.describe(
         channel_id="Select the channel for schedule updates",
         message_id="Select or create the schedule message in the channel",
-        briefing_channel_id="Select the forum channel for mission briefings"
+        briefing_channel_id="Select the forum channel for mission briefings",
+        log_channel_id="Select the channel for bot log/fallback messages (optional)"
     )
     async def configure(
         self,
         interaction: discord.Interaction,
         channel_id: str,
         message_id: str,
-        briefing_channel_id: str
+        briefing_channel_id: str,
+        log_channel_id: str = None
     ):
         print(f"[DEBUG] configure called with: channel_id={channel_id}, message_id={message_id}, briefing_channel_id={briefing_channel_id}")
         print(f"[DEBUG] interaction.guild: {getattr(interaction, 'guild', None)}")
@@ -75,12 +77,31 @@ class ConfigureCommand(commands.Cog):
                 return
 
         # Save config to database
+        log_channel_id_int = None
+        if log_channel_id:
+            try:
+                log_channel_id_int = int(log_channel_id)
+                log_ch = interaction.guild.get_channel(log_channel_id_int)
+                if not log_ch:
+                    await interaction.followup.send(f"⚠️ Log channel not found, saving without it.", ephemeral=True)
+                    log_channel_id_int = None
+            except Exception:
+                log_channel_id_int = None
+
         await schedule_config_repository.set_config(
             interaction.guild.id,
             channel_id_int,
             message_id_int,
-            briefing_channel_id_int
+            briefing_channel_id_int,
+            log_channel_id_int
         )
+
+        # Populate forum tag cache on configure
+        try:
+            from services.forum_tag_service import forum_tag_service
+            await forum_tag_service.refresh_tags(interaction.guild, briefing_channel_id_int)
+        except Exception as e:
+            print(f"[DEBUG] Failed to refresh forum tag cache on configure: {e}")
     @configure.autocomplete('channel_id')
     async def channel_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
         print(f"[DEBUG] channel_autocomplete called with current='{current}', guild={getattr(interaction, 'guild', None)}")
@@ -107,6 +128,17 @@ class ConfigureCommand(commands.Cog):
             if channel.type == discord.ChannelType.forum and current.lower() in channel.name.lower():
                 choices.append(app_commands.Choice(name=f"# {channel.name}", value=str(channel.id)))
         print(f"[DEBUG] briefing_channel_autocomplete: choices={choices}")
+        return choices[:25]
+
+    @configure.autocomplete('log_channel_id')
+    async def log_channel_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        guild = interaction.guild
+        if not guild:
+            return []
+        choices = []
+        for channel in guild.text_channels:
+            if current.lower() in channel.name.lower():
+                choices.append(app_commands.Choice(name=f"#{channel.name}", value=str(channel.id)))
         return choices[:25]
 
     @configure.autocomplete('message_id')

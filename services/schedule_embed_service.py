@@ -183,19 +183,10 @@ async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_rat
         threads.extend(forum_channel.threads or [])
         logger.info(f"Found {len(threads)} active threads")
     
-    # Method 2: Fetch archived threads more comprehensively
+    # Method 2: Fetch archived threads
     try:
-        # Get public archived threads
         async for thread in forum_channel.archived_threads(limit=None):
             threads.append(thread)
-        
-        # Get private archived threads if bot has permission
-        try:
-            async for thread in forum_channel.archived_threads(private=True, limit=None):
-                threads.append(thread)
-        except discord.Forbidden:
-            pass  # Bot doesn't have permission for private threads
-            
     except Exception as e:
         logger.warning(f"Error fetching archived threads: {e}")
     
