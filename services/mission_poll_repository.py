@@ -21,14 +21,15 @@ class MissionPollRepository:
         mission_thread_ids: list[int],
         poll_end_time: datetime,
         created_by: int,
+        links_message_id: int = None,
     ) -> int:
         """Insert a new poll record. Returns the new poll ID."""
         query = """
         INSERT INTO mission_polls 
             (guild_id, poll_message_id, channel_id, target_event_id,
              framework_filter, composition_filter, mission_thread_ids,
-             poll_end_time, status, created_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, 'active', $9)
+             poll_end_time, status, created_by, links_message_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, 'active', $9, $10)
         RETURNING id;
         """
         thread_ids_json = json.dumps(mission_thread_ids)
@@ -43,6 +44,7 @@ class MissionPollRepository:
             thread_ids_json,
             poll_end_time,
             created_by,
+            links_message_id,
         )
         poll_id = result["id"] if result else None
         logger.info(f"Created mission poll #{poll_id} for event {target_event_id}")
@@ -54,7 +56,8 @@ class MissionPollRepository:
             query = """
             SELECT id, guild_id, poll_message_id, channel_id, target_event_id,
                    framework_filter, composition_filter, mission_thread_ids,
-                   poll_end_time, status, winning_thread_id, created_by, created_at
+                   poll_end_time, status, winning_thread_id, created_by, created_at,
+                   links_message_id
             FROM mission_polls WHERE status = 'active' AND guild_id = $1
             ORDER BY poll_end_time;
             """
@@ -63,7 +66,8 @@ class MissionPollRepository:
             query = """
             SELECT id, guild_id, poll_message_id, channel_id, target_event_id,
                    framework_filter, composition_filter, mission_thread_ids,
-                   poll_end_time, status, winning_thread_id, created_by, created_at
+                   poll_end_time, status, winning_thread_id, created_by, created_at,
+                   links_message_id
             FROM mission_polls WHERE status = 'active'
             ORDER BY poll_end_time;
             """
@@ -75,7 +79,8 @@ class MissionPollRepository:
         query = """
         SELECT id, guild_id, poll_message_id, channel_id, target_event_id,
                framework_filter, composition_filter, mission_thread_ids,
-               poll_end_time, status, winning_thread_id, created_by, created_at
+               poll_end_time, status, winning_thread_id, created_by, created_at,
+               links_message_id
         FROM mission_polls WHERE status = 'active' AND target_event_id = $1;
         """
         result = await db_connection.execute_single(query, target_event_id)
@@ -131,6 +136,7 @@ class MissionPollRepository:
             "winning_thread_id": row[10],
             "created_by": row[11],
             "created_at": row[12],
+            "links_message_id": row[13] if len(row) > 13 else None,
         }
 
 

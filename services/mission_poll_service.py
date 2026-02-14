@@ -153,9 +153,9 @@ def get_thread_tags(thread: discord.Thread) -> list[str]:
 
 
 def get_thread_composition_tags(thread: discord.Thread) -> list[str]:
-    """Get only composition (non-framework) tags from a thread."""
+    """Get only composition (non-framework) tags from a thread, sorted alphabetically."""
     tags = get_thread_tags(thread)
-    return [t for t in tags if not FRAMEWORK_TAG_PATTERN.match(t)]
+    return sorted([t for t in tags if not FRAMEWORK_TAG_PATTERN.match(t)])
 
 
 def filter_threads_by_tags(

@@ -57,6 +57,11 @@ async def initialize_database():
     );
     """
 
+    ensure_links_message_id_query = """
+    ALTER TABLE mission_polls
+        ADD COLUMN IF NOT EXISTS links_message_id BIGINT;
+    """
+
     create_mission_polls_index_query = """
     CREATE INDEX IF NOT EXISTS idx_mission_polls_guild_status
         ON mission_polls (guild_id, status);
@@ -74,6 +79,7 @@ async def initialize_database():
         await db_connection.execute_command(ensure_schedule_config_columns_query)
         await db_connection.execute_command(ensure_log_channel_id_query)
         await db_connection.execute_command(create_mission_polls_table_query)
+        await db_connection.execute_command(ensure_links_message_id_query)
         await db_connection.execute_command(create_mission_polls_index_query)
         await db_connection.execute_command(create_mission_polls_end_time_index_query)
         print("Database tables initialized successfully")

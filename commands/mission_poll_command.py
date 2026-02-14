@@ -61,6 +61,73 @@ class MissionPollCommands(commands.Cog):
         # Only Mission type, unassigned (empty name)
         return [e for e in events if e.type == "Mission" and not e.name.strip()]
 
+    # ─── Helper: find Raid-Helper event post in the events channel ─────
+    async def _find_event_post_link(self, guild: discord.Guild, event_date: date) -> str | None:
+        """Search for a Raid-Helper event post matching the given date.
+
+        Looks for a channel whose name contains 'events' and scans recent
+        messages for an embed that mentions the target date.
+        Returns a Discord message URL or None.
+        """
+        # Find the events channel by name pattern (e.g. "events📅❗")
+        events_channel = None
+        for ch in guild.text_channels:
+            if "events" in ch.name.lower():
+                events_channel = ch
+                break
+
+        if not events_channel:
+            logger.debug("No events channel found for event-post linking")
+            return None
+
+        # Build date strings to search for in embeds.
+        # Raid-Helper can format dates various ways, so we check several.
+        day_name = event_date.strftime("%A")        # "Sunday"
+        day_num = event_date.day                     # 15
+        month_name = event_date.strftime("%B")       # "February"
+        iso_str = event_date.isoformat()             # "2026-02-15"
+        # Also try DD/MM and DD.MM variants
+        search_variants = [
+            f"{day_name}",                           # at minimum the weekday
+            f"{day_num} {month_name}",               # "15 February"
+            f"{month_name} {day_num}",               # "February 15"
+            iso_str,                                 # "2026-02-15"
+            event_date.strftime("%d/%m"),             # "15/02"
+        ]
+
+        try:
+            async for msg in events_channel.history(limit=50, oldest_first=False):
+                # Check embeds (Raid-Helper posts as embeds)
+                for embed in msg.embeds:
+                    haystack = " ".join(filter(None, [
+                        embed.title or "",
+                        embed.description or "",
+                        " ".join(f.name + " " + f.value for f in embed.fields),
+                    ])).lower()
+
+                    # Need at least the weekday AND one date indicator
+                    has_day = day_name.lower() in haystack
+                    has_date = any(v.lower() in haystack for v in search_variants[1:])
+                    if has_day and has_date:
+                        url = f"https://discord.com/channels/{guild.id}/{events_channel.id}/{msg.id}"
+                        logger.info(f"Found event post for {event_date}: {url}")
+                        return url
+
+                # Also check plain message content as fallback
+                if msg.content:
+                    content_lower = msg.content.lower()
+                    has_day = day_name.lower() in content_lower
+                    has_date = any(v.lower() in content_lower for v in search_variants[1:])
+                    if has_day and has_date:
+                        url = f"https://discord.com/channels/{guild.id}/{events_channel.id}/{msg.id}"
+                        logger.info(f"Found event post for {event_date}: {url}")
+                        return url
+        except Exception as e:
+            logger.warning(f"Error searching events channel for event post: {e}")
+
+        logger.debug(f"No event post found for {event_date}")
+        return None
+
     # ─── The slash command ─────────────────────────────────────────────
     @app_commands.guilds(Config.GUILD_ID)
     @app_commands.command(
@@ -295,8 +362,9 @@ class MissionPollCommands(commands.Cog):
             color=discord.Color.blue(),
         )
 
+        links_message = None
         try:
-            await interaction.channel.send(embed=links_embed)
+            links_message = await interaction.channel.send(embed=links_embed)
         except Exception as e:
             logger.error(f"Failed to send links embed: {e}")
 
@@ -312,13 +380,20 @@ class MissionPollCommands(commands.Cog):
             mission_thread_ids=mission_thread_ids,
             poll_end_time=poll_end_dt,
             created_by=interaction.user.id,
+            links_message_id=links_message.id if links_message else None,
         )
 
-        await interaction.followup.send(
+        confirmation_msg = (
             f"✅ Mission poll created for **{format_event_date(target_event.date)}** [{fw_abbrev}] "
-            f"with {len(remaining)} options. Poll ends in {duration}h.",
-            ephemeral=True,
+            f"with {len(remaining)} options. Poll ends in {duration}h."
         )
+        await send_dm_safe(interaction.user, content=confirmation_msg, fallback_channel=log_channel)
+        if log_channel:
+            try:
+                await log_channel.send(confirmation_msg)
+            except Exception:
+                pass
+        await interaction.followup.send(confirmation_msg, ephemeral=True)
 
     # ─── Autocomplete: framework ───────────────────────────────────────
     @missionpoll_command.autocomplete("framework")
@@ -590,7 +665,51 @@ class MissionPollCommands(commands.Cog):
                 f"{format_event_date(target_event.date)}"
             )
 
-            # Update the schedule embed
+            # ── Cleanup: delete poll + links messages ──
+            try:
+                await poll_message.delete()
+                logger.info(f"Deleted poll message {poll_message.id}")
+            except Exception as e:
+                logger.warning(f"Failed to delete poll message: {e}")
+
+            links_msg_id = poll_data.get("links_message_id")
+            if links_msg_id and channel:
+                try:
+                    links_msg = await channel.fetch_message(links_msg_id)
+                    await links_msg.delete()
+                    logger.info(f"Deleted links embed message {links_msg_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete links embed message: {e}")
+
+            # ── Find the Raid-Helper event post in the events channel ──
+            event_post_link = await self._find_event_post_link(
+                guild, target_event.date
+            )
+
+            # ── Build announcement ──
+            # Mention the mission thread owner so they know to update the event
+            owner_mention = ""
+            if winning_thread and winning_thread.owner_id:
+                owner_mention = f"<@{winning_thread.owner_id}>"
+
+            announcement = (
+                f"✅ Poll ended — **{mission_name}** has been scheduled for "
+                f"**{format_event_date(target_event.date)}**"
+            )
+
+            if owner_mention:
+                if event_post_link:
+                    announcement += (
+                        f"\n\n{owner_mention} Please update the "
+                        f"[scheduled event]({event_post_link}) with the `/edit` command."
+                    )
+                else:
+                    announcement += (
+                        f"\n\n{owner_mention} Please update the scheduled event "
+                        f"in the events channel with the `/edit` command."
+                    )
+
+            # ── Update the schedule embed + send announcement ──
             try:
                 config = await schedule_config_repository.get_config(guild.id)
                 if config:
@@ -602,8 +721,23 @@ class MissionPollCommands(commands.Cog):
                         embed = await build_schedule_embed(guild)
                         await msg.edit(embed=embed)
                         logger.info("Schedule embed updated after poll auto-schedule")
+
+                        # Send visible announcement in the schedule channel
+                        try:
+                            await sched_channel.send(announcement)
+                        except Exception as e:
+                            logger.warning(f"Failed to send announcement to schedule channel: {e}")
             except Exception as e:
                 logger.warning(f"Failed to update schedule embed after poll: {e}")
+
+            # Also notify log channel and DM the poll creator
+            if log_channel:
+                try:
+                    await log_channel.send(announcement)
+                except Exception:
+                    pass
+            if creator:
+                await send_dm_safe(creator, content=announcement, fallback_channel=log_channel)
         else:
             logger.error(f"Failed to update event {target_event.id}")
             await mission_poll_repository.mark_failed(poll_data["id"])
