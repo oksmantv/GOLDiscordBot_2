@@ -88,6 +88,8 @@ class GOLBot(commands.Bot):
             logger.info("Loaded populate_command Cog")
             await self.load_extension('commands.mission_poll_command')
             logger.info("Loaded mission_poll_command Cog")
+            await self.load_extension('commands.cancel_poll_command')
+            logger.info("Loaded cancel_poll_command Cog")
 
             # Print all app commands before syncing
             logger.info(f"App commands before sync: {[cmd.name for cmd in self.tree.get_commands()]} (total: {len(self.tree.get_commands())})")

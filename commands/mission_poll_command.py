@@ -168,7 +168,7 @@ class MissionPollCommands(commands.Cog):
             )
             return
 
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
 
         # ── Validate duration ──
         if duration not in (12, 24, 36, 48, 60, 72):
@@ -340,8 +340,16 @@ class MissionPollCommands(commands.Cog):
         # ── Create the Discord Poll ──
         poll_end_dt = datetime.now(timezone.utc) + timedelta(hours=duration)
 
+        # Find @Active role to mention in the poll message
+        active_role = discord.utils.get(guild.roles, name="Active")
+        poll_content = f"{active_role.mention} Vote for the next mission!" if active_role else None
+
         try:
-            poll_message = await interaction.channel.send(poll=poll)
+            poll_message = await interaction.channel.send(
+                content=poll_content,
+                poll=poll,
+                allowed_mentions=discord.AllowedMentions(roles=True),
+            )
         except Exception as e:
             logger.error(f"Failed to send poll: {e}")
             await interaction.followup.send(
