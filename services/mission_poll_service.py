@@ -183,24 +183,37 @@ def filter_threads_by_tags(
     return filtered
 
 
-async def get_excluded_thread_ids(guild_id: int) -> set[int]:
-    """Get thread IDs that won a poll for an event within the last 2 weeks (from event date).
-    
-    Deduplication window: 2 weeks from the event date of the winning poll.
+async def get_excluded_thread_ids(guild_id: int, threads: list[discord.Thread]) -> tuple[set[int], list[str]]:
+    """Get thread IDs whose mission name matches an event scheduled in the past 2 weeks.
+
+    Uses the events table as the master source of truth.
+    Any event with a non-empty name in the past 2 weeks means that mission
+    was played/scheduled and should not appear in a new poll.
+
+    Returns:
+        A tuple of (excluded_thread_ids, matched_event_names) for logging.
     """
-    recent_winners = await mission_poll_repository.get_recent_winners(guild_id)
     today = date.today()
+    start_date = today - timedelta(weeks=2)
+    events = await event_repository.get_events_by_guild_and_date_range(guild_id, start_date, today)
+
+    # Collect non-empty event names from the past 2 weeks
+    recent_names = set()
+    for ev in events:
+        if ev.name and ev.name.strip():
+            recent_names.add(ev.name.strip().lower())
+
+    if not recent_names:
+        return set(), []
+
     excluded = set()
+    matched_names = []
+    for thread in threads:
+        if thread.name.strip().lower() in recent_names:
+            excluded.add(thread.id)
+            matched_names.append(thread.name)
 
-    for winner in recent_winners:
-        event_date = winner["event_date"]
-        # If the event was less than 2 weeks ago, exclude this thread
-        if isinstance(event_date, datetime):
-            event_date = event_date.date()
-        if today - event_date < timedelta(weeks=2):
-            excluded.add(winner["winning_thread_id"])
-
-    return excluded
+    return excluded, matched_names
 
 
 async def extract_author_from_thread(thread: discord.Thread) -> str:
@@ -276,10 +289,14 @@ async def extract_author_from_thread(thread: discord.Thread) -> str:
 
 
 async def send_dm_safe(user: discord.User, content: str = None, embed: discord.Embed = None, 
-                       fallback_channel: discord.TextChannel = None):
-    """Send a DM to a user, falling back to a channel message if DMs are disabled."""
+                       fallback_channel: discord.TextChannel = None) -> bool:
+    """Send a DM to a user, falling back to a channel message if DMs are disabled.
+    
+    Returns True if the DM was delivered, False if it fell back to the channel.
+    """
     try:
         await user.send(content=content, embed=embed)
+        return True
     except discord.Forbidden:
         if fallback_channel:
             try:
@@ -288,6 +305,7 @@ async def send_dm_safe(user: discord.User, content: str = None, embed: discord.E
                 logger.warning(f"Failed to send fallback message to #{fallback_channel.name}: {e}")
         else:
             logger.warning(f"Cannot DM user {user} and no fallback channel available")
+        return False
     except Exception as e:
         logger.warning(f"Failed to DM user {user}: {e}")
         if fallback_channel:
@@ -295,6 +313,7 @@ async def send_dm_safe(user: discord.User, content: str = None, embed: discord.E
                 await fallback_channel.send(content=content, embed=embed)
             except Exception:
                 pass
+        return False
 
 
 async def get_log_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:

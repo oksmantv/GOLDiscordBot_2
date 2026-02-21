@@ -137,16 +137,18 @@ class MissionPollCommands(commands.Cog):
     @app_commands.describe(
         framework="Select the framework version to filter missions",
         event="Select the upcoming event to create a poll for",
-        composition="Filter by composition type (default: All)",
         duration="Poll duration in hours (default: 24, min: 12, max: 72)",
+        options="Number of missions in the poll (default: 5, min: 3, max: 10)",
+        composition="Filter by composition type (default: All)",
     )
     async def missionpoll_command(
         self,
         interaction: discord.Interaction,
         framework: str,
         event: str,
-        composition: str = "All",
         duration: int = 24,
+        options: app_commands.Range[int, 3, 10] = 5,
+        composition: str = "All",
     ):
         """Handle the /missionpoll command."""
         # ── Permission check (admin or @Editor) ──
@@ -223,8 +225,8 @@ class MissionPollCommands(commands.Cog):
         all_threads = await fetch_all_forum_threads(guild, briefing_channel_id)
         filtered = filter_threads_by_tags(all_threads, framework, composition)
 
-        # ── Deduplication: exclude recent winners ──
-        excluded_ids = await get_excluded_thread_ids(guild.id)
+        # ── Deduplication: exclude recently scheduled missions ──
+        excluded_ids, matched_names = await get_excluded_thread_ids(guild.id, filtered)
         dedup_removed = []
         remaining = []
         for t in filtered:
@@ -235,7 +237,7 @@ class MissionPollCommands(commands.Cog):
 
         if dedup_removed:
             logger.info(
-                f"Deduplication removed {len(dedup_removed)} missions: "
+                f"Deduplication removed {len(dedup_removed)} missions (scheduled in past 2 weeks): "
                 f"{[t.name for t in dedup_removed]}"
             )
 
@@ -254,7 +256,7 @@ class MissionPollCommands(commands.Cog):
                     f"**Forum Channel:** #{guild.get_channel(briefing_channel_id).name if guild.get_channel(briefing_channel_id) else 'Unknown'}\n"
                     f"**Total threads scanned:** {len(all_threads)}\n"
                     f"**After framework+composition filter:** {len(filtered)}\n"
-                    f"**Removed by deduplication (won recently):** {len(dedup_removed)}\n\n"
+                    f"**Removed by deduplication (scheduled in past 2 weeks):** {len(dedup_removed)}\n\n"
                     "💡 Try a different framework version, composition, or wait for the deduplication "
                     "window (2 weeks from event date) to expire."
                 ),
@@ -286,12 +288,12 @@ class MissionPollCommands(commands.Cog):
             )
             return
 
-        # ── Random selection if >10 ──
+        # ── Random selection if more than requested options ──
         excluded_from_poll = []
-        if len(remaining) > MAX_POLL_OPTIONS:
+        if len(remaining) > options:
             random.shuffle(remaining)
-            selected = remaining[:MAX_POLL_OPTIONS]
-            excluded_from_poll = remaining[MAX_POLL_OPTIONS:]
+            selected = remaining[:options]
+            excluded_from_poll = remaining[options:]
             remaining = selected
 
             # DM the user about excluded missions
@@ -300,9 +302,9 @@ class MissionPollCommands(commands.Cog):
                 title="ℹ️ Mission Poll — Random Selection Applied",
                 color=discord.Color.blue(),
                 description=(
-                    f"**{len(excluded_from_poll) + MAX_POLL_OPTIONS}** missions matched your filter, "
-                    f"but Discord polls allow max {MAX_POLL_OPTIONS} options.\n\n"
-                    f"**Randomly selected:** {MAX_POLL_OPTIONS} missions\n"
+                    f"**{len(excluded_from_poll) + options}** missions matched your filter, "
+                    f"but you requested {options} options.\n\n"
+                    f"**Randomly selected:** {options} missions\n"
                     f"**Excluded:** {excluded_names}"
                 ),
             )
@@ -315,8 +317,8 @@ class MissionPollCommands(commands.Cog):
                 title="ℹ️ Deduplication Notice",
                 color=discord.Color.greyple(),
                 description=(
-                    f"The following missions were excluded because they won a poll "
-                    f"for an event within the last 2 weeks:\n\n{dedup_names}"
+                    f"The following missions were excluded because they were "
+                    f"scheduled for an event within the past 2 weeks:\n\n{dedup_names}"
                 ),
             )
             await send_dm_safe(interaction.user, embed=dedup_embed, fallback_channel=log_channel)
@@ -395,8 +397,8 @@ class MissionPollCommands(commands.Cog):
             f"✅ Mission poll created for **{format_event_date(target_event.date)}** [{fw_abbrev}] "
             f"with {len(remaining)} options. Poll ends in {duration}h."
         )
-        await send_dm_safe(interaction.user, content=confirmation_msg, fallback_channel=log_channel)
-        if log_channel:
+        dm_ok = await send_dm_safe(interaction.user, content=confirmation_msg, fallback_channel=log_channel)
+        if not dm_ok and log_channel:
             try:
                 await log_channel.send(confirmation_msg)
             except Exception:
@@ -554,10 +556,11 @@ class MissionPollCommands(commands.Cog):
                 f"❌ **Poll Failed** — Poll message was deleted.\n"
                 f"Poll #{poll_data['id']} for event ID {poll_data['target_event_id']}."
             )
-            if log_channel:
-                await log_channel.send(error_msg)
+            dm_ok = False
             if creator:
-                await send_dm_safe(creator, content=error_msg, fallback_channel=log_channel)
+                dm_ok = await send_dm_safe(creator, content=error_msg, fallback_channel=log_channel)
+            if not dm_ok and log_channel:
+                await log_channel.send(error_msg)
             return
         except Exception as e:
             logger.error(f"Failed to fetch poll message: {e}")
@@ -610,19 +613,20 @@ class MissionPollCommands(commands.Cog):
                 except discord.NotFound:
                     logger.warning(f"Winning thread {winning_thread_id} not found/deleted")
                     # Thread deleted — warn but don't fail, just can't link
-                    if log_channel:
-                        await log_channel.send(
-                            f"⚠️ Winning thread for poll #{poll_data['id']} was deleted. "
-                            "Cannot auto-schedule."
-                        )
+                    dm_ok = False
                     if creator:
-                        await send_dm_safe(
+                        dm_ok = await send_dm_safe(
                             creator,
                             content=(
                                 f"⚠️ The winning mission thread was deleted. "
                                 f"Poll #{poll_data['id']} could not auto-schedule."
                             ),
                             fallback_channel=log_channel,
+                        )
+                    if not dm_ok and log_channel:
+                        await log_channel.send(
+                            f"⚠️ Winning thread for poll #{poll_data['id']} was deleted. "
+                            "Cannot auto-schedule."
                         )
                     await mission_poll_repository.mark_failed(poll_data["id"])
                     return
@@ -738,14 +742,15 @@ class MissionPollCommands(commands.Cog):
             except Exception as e:
                 logger.warning(f"Failed to update schedule embed after poll: {e}")
 
-            # Also notify log channel and DM the poll creator
-            if log_channel:
+            # Also notify poll creator via DM (fall back to log channel)
+            dm_ok = False
+            if creator:
+                dm_ok = await send_dm_safe(creator, content=announcement, fallback_channel=log_channel)
+            if not dm_ok and log_channel:
                 try:
                     await log_channel.send(announcement)
                 except Exception:
                     pass
-            if creator:
-                await send_dm_safe(creator, content=announcement, fallback_channel=log_channel)
         else:
             logger.error(f"Failed to update event {target_event.id}")
             await mission_poll_repository.mark_failed(poll_data["id"])
