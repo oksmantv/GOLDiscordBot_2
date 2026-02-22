@@ -72,6 +72,42 @@ async def initialize_database():
         ON mission_polls (poll_end_time) WHERE status = 'active';
     """
 
+    # ── Leave of Absence tables ────────────────────────────────────────
+
+    create_loa_table_query = """
+    CREATE TABLE IF NOT EXISTS leave_of_absence (
+        id SERIAL PRIMARY KEY,
+        guild_id BIGINT NOT NULL,
+        user_id BIGINT NOT NULL,
+        start_date DATE NOT NULL,
+        end_date DATE NOT NULL,
+        reason TEXT,
+        expired BOOLEAN NOT NULL DEFAULT FALSE,
+        notified BOOLEAN NOT NULL DEFAULT FALSE,
+        message_id BIGINT,
+        channel_id BIGINT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    """
+
+    create_loa_guild_active_index_query = """
+    CREATE INDEX IF NOT EXISTS idx_loa_guild_active
+        ON leave_of_absence (guild_id) WHERE expired = FALSE;
+    """
+
+    create_loa_user_active_index_query = """
+    CREATE INDEX IF NOT EXISTS idx_loa_user_active
+        ON leave_of_absence (guild_id, user_id) WHERE expired = FALSE;
+    """
+
+    create_loa_config_table_query = """
+    CREATE TABLE IF NOT EXISTS loa_config (
+        guild_id BIGINT PRIMARY KEY,
+        channel_id BIGINT NOT NULL,
+        message_id BIGINT NOT NULL
+    );
+    """
+
     try:
         await db_connection.execute_command(create_events_table_query)
         await db_connection.execute_command(create_index_query)
@@ -82,6 +118,10 @@ async def initialize_database():
         await db_connection.execute_command(ensure_links_message_id_query)
         await db_connection.execute_command(create_mission_polls_index_query)
         await db_connection.execute_command(create_mission_polls_end_time_index_query)
+        await db_connection.execute_command(create_loa_table_query)
+        await db_connection.execute_command(create_loa_guild_active_index_query)
+        await db_connection.execute_command(create_loa_user_active_index_query)
+        await db_connection.execute_command(create_loa_config_table_query)
         print("Database tables initialized successfully")
         return True
     except Exception as e:
