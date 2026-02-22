@@ -129,6 +129,15 @@ class GOLBot(commands.Bot):
                     except Exception as e:
                         logger.warning(f"Failed to update schedule message for guild {guild.name}: {e}")
 
+    async def update_loa_message_on_startup(self):
+        from services.loa_service import update_summary_message
+        for guild in self.guilds:
+            try:
+                await update_summary_message(self, guild.id)
+                logger.info(f"Updated LOA summary message for guild {guild.name}")
+            except Exception as e:
+                logger.warning(f"Failed to update LOA summary message for guild {guild.name}: {e}")
+
     async def on_ready(self):
         """Called when the bot is ready."""
         logger.info(f'{self.user} has connected to Discord!')
@@ -143,6 +152,9 @@ class GOLBot(commands.Bot):
 
         # Update schedule message on startup
         await self.update_schedule_message_on_startup()
+
+        # Update LOA summary message on startup
+        await self.update_loa_message_on_startup()
 
     async def on_guild_join(self, guild):
         """Called when the bot joins a new guild."""

@@ -186,14 +186,31 @@ class LOACommands(commands.Cog):
         name="cancelloa",
         description="Cancel an active Leave of Absence",
     )
-    @app_commands.describe(loa="Select the leave of absence to cancel")
+    @app_commands.describe(
+        loa="Select the leave of absence to cancel",
+        user="(Admin only) Cancel another member's LOA",
+    )
     @app_commands.guilds(discord.Object(id=Config.GUILD_ID))
     async def cancel_loa_command(
         self,
         interaction: discord.Interaction,
         loa: int,
+        user: Optional[discord.Member] = None,
     ):
         await interaction.response.defer(ephemeral=True)
+
+        # ── Admin check when targeting another user ──
+        is_admin = interaction.user.guild_permissions.administrator
+        if user is not None and user.id != interaction.user.id:
+            if not is_admin:
+                await interaction.followup.send(
+                    "❌ Only administrators can cancel another member's LOA.",
+                    ephemeral=True,
+                )
+                return
+            target_user_id = user.id
+        else:
+            target_user_id = interaction.user.id
 
         # ── Fetch & validate ──
         loa_record = await loa_repository.get_loa_by_id(loa)
@@ -204,9 +221,9 @@ class LOACommands(commands.Cog):
             )
             return
 
-        if loa_record["user_id"] != interaction.user.id:
+        if loa_record["user_id"] != target_user_id:
             await interaction.followup.send(
-                "❌ You can only cancel your own leave of absence.",
+                "❌ The selected LOA does not belong to that user.",
                 ephemeral=True,
             )
             return
@@ -227,11 +244,11 @@ class LOACommands(commands.Cog):
         #    AND the user has no other currently-active LOA ──
         if loa_record["start_date"] <= today:
             remaining = await loa_repository.get_active_loas_by_user(
-                interaction.guild_id, interaction.user.id
+                interaction.guild_id, loa_record["user_id"]
             )
             still_on_leave = any(l["start_date"] <= today for l in remaining)
             if not still_on_leave:
-                await restore_active_role(interaction.guild, interaction.user.id)
+                await restore_active_role(interaction.guild, loa_record["user_id"])
 
         # ── Delete announcement embed ──
         await delete_loa_announcement(interaction.guild, loa_record)
@@ -241,11 +258,20 @@ class LOACommands(commands.Cog):
 
         start_str = loa_record["start_date"].strftime("%d-%m-%Y")
         end_str = loa_record["end_date"].strftime("%d-%m-%Y")
-        await interaction.followup.send(
-            f"✅ Your leave of absence (`{start_str}` → `{end_str}`) "
-            "has been cancelled.\nWelcome back to duty! 💪",
-            ephemeral=True,
-        )
+        target_mention = f"<@{loa_record['user_id']}>"
+
+        if loa_record["user_id"] == interaction.user.id:
+            await interaction.followup.send(
+                f"✅ Your leave of absence (`{start_str}` → `{end_str}`) "
+                "has been cancelled.\nWelcome back to duty! 💪",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                f"✅ Leave of absence for {target_mention} "
+                f"(`{start_str}` → `{end_str}`) has been cancelled.",
+                ephemeral=True,
+            )
 
     @cancel_loa_command.autocomplete("loa")
     async def _cancel_loa_autocomplete(
@@ -253,8 +279,24 @@ class LOACommands(commands.Cog):
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[int]]:
+        # Determine whose LOAs to show based on the 'user' param
+        # Admins who specify a user get that user's LOAs
+        is_admin = interaction.user.guild_permissions.administrator
+        target_user_id = interaction.user.id
+
+        if is_admin:
+            # Check if a user was selected in the interaction namespace
+            namespace = interaction.namespace
+            selected_user = getattr(namespace, "user", None)
+            if selected_user is not None:
+                # selected_user is a Member or could be an ID
+                if isinstance(selected_user, discord.Member):
+                    target_user_id = selected_user.id
+                elif isinstance(selected_user, int):
+                    target_user_id = selected_user
+
         active_loas = await loa_repository.get_active_loas_by_user(
-            interaction.guild_id, interaction.user.id
+            interaction.guild_id, target_user_id
         )
 
         choices: list[app_commands.Choice[int]] = []
