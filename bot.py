@@ -27,6 +27,7 @@ class GOLBot(commands.Bot):
         )
 
         self._background_tasks_started = False
+        self._on_ready_fired = False  # Guard against multiple on_ready calls
 
     @tasks.loop(hours=12)
     async def _event_population_maintenance_loop(self):
@@ -100,12 +101,11 @@ class GOLBot(commands.Bot):
             test_guild_id = int(Config.GUILD_ID)
             guild_obj = discord.Object(id=test_guild_id)
             
-            # First, clear any global commands to prevent duplicates
+            # Clear global commands locally (no API call) to prevent duplicates
             self.tree.clear_commands(guild=None)
-            await self.tree.sync()
-            logger.info("Cleared global commands to prevent duplicates.")
+            logger.info("Cleared global command tree (local only).")
             
-            # Sync guild commands
+            # Sync guild commands (single API call)
             guild_synced = await self.tree.sync(guild=guild_obj)
             logger.info(f"Synced {len(guild_synced)} commands to guild {test_guild_id}: {[cmd.name for cmd in guild_synced]}")
 
@@ -139,9 +139,15 @@ class GOLBot(commands.Bot):
                 logger.warning(f"Failed to update LOA summary message for guild {guild.name}: {e}")
 
     async def on_ready(self):
-        """Called when the bot is ready."""
+        """Called when the bot is ready (also fires on reconnects)."""
         logger.info(f'{self.user} has connected to Discord!')
         logger.info(f'Bot is in {len(self.guilds)} guilds')
+
+        # Guard: only run expensive startup work once, not on every reconnect
+        if self._on_ready_fired:
+            logger.info("on_ready fired again (reconnect) — skipping startup API calls")
+            return
+        self._on_ready_fired = True
 
         # Set bot status
         activity = discord.Activity(
@@ -150,8 +156,13 @@ class GOLBot(commands.Bot):
         )
         await self.change_presence(activity=activity)
 
+        # Small delay between API calls to avoid burst rate limits
+        await asyncio.sleep(1)
+
         # Update schedule message on startup
         await self.update_schedule_message_on_startup()
+
+        await asyncio.sleep(1)
 
         # Update LOA summary message on startup
         await self.update_loa_message_on_startup()
