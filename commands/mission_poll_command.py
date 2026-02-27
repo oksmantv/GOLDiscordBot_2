@@ -5,6 +5,7 @@ from typing import Optional
 from datetime import datetime, date, timedelta, timezone
 import random
 import re
+import time
 import logging
 
 from config import Config
@@ -31,11 +32,25 @@ from services.event_repository import event_repository
 logger = logging.getLogger(__name__)
 
 
+# ─── Autocomplete cache settings ──────────────────────────────────
+_AUTOCOMPLETE_COOLDOWN_SECONDS = 2.0   # Min interval between autocomplete DB queries per user
+_BRIEFING_CACHE_TTL = 300.0            # 5 min TTL for briefing-channel-id cache
+_EVENT_CACHE_TTL = 30.0                # 30 s TTL for unassigned-events cache
+
+
 class MissionPollCommands(commands.Cog):
     """Cog for the /missionpoll command and poll monitoring background task."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+        # ── Autocomplete caches ──
+        # Briefing channel id: {guild_id: (value, timestamp)}
+        self._briefing_cache: dict[int, tuple[Optional[int], float]] = {}
+        # Unassigned events: {guild_id: (list[Event], timestamp)}
+        self._event_cache: dict[int, tuple[list, float]] = {}
+        # Per-user cooldown tracker: {user_id: last_autocomplete_ts}
+        self._autocomplete_timestamps: dict[int, float] = {}
 
     async def cog_load(self):
         """Called when the cog is loaded. Start background task."""
@@ -46,20 +61,58 @@ class MissionPollCommands(commands.Cog):
         """Called when the cog is unloaded. Stop background task."""
         self._poll_monitor_loop.cancel()
 
-    # ─── Helper: get briefing channel ID from config ───────────────────
-    async def _get_briefing_channel_id(self, guild_id: int) -> Optional[int]:
-        config = await schedule_config_repository.get_config(guild_id)
-        if config:
-            return config.get("briefing_channel_id")
-        return None
+    # ─── Helper: get briefing channel ID from config (cached) ──────────
+    async def _get_briefing_channel_id(self, guild_id: int, *, use_cache: bool = False) -> Optional[int]:
+        """Return the briefing channel ID for a guild.
 
-    # ─── Helper: get unassigned mission events in next 2 weeks ─────────
-    async def _get_upcoming_unassigned_events(self, guild_id: int):
+        When *use_cache* is True the value is served from an in-memory
+        cache (TTL = ``_BRIEFING_CACHE_TTL``) to avoid hitting the DB on
+        every autocomplete keystroke.
+        """
+        now = time.monotonic()
+        if use_cache:
+            cached = self._briefing_cache.get(guild_id)
+            if cached and (now - cached[1]) < _BRIEFING_CACHE_TTL:
+                return cached[0]
+
+        config = await schedule_config_repository.get_config(guild_id)
+        value = config.get("briefing_channel_id") if config else None
+        self._briefing_cache[guild_id] = (value, now)
+        return value
+
+    # ─── Helper: get unassigned mission events in next 2 weeks (cached) ─
+    async def _get_upcoming_unassigned_events(self, guild_id: int, *, use_cache: bool = False):
+        """Return upcoming unassigned Mission events.
+
+        With *use_cache* the result list is reused for ``_EVENT_CACHE_TTL``
+        seconds so rapid autocomplete calls don't spam the database.
+        """
+        now = time.monotonic()
+        if use_cache:
+            cached = self._event_cache.get(guild_id)
+            if cached and (now - cached[1]) < _EVENT_CACHE_TTL:
+                return cached[0]
+
         today = date.today()
         end_date = today + timedelta(weeks=2)
         events = await event_repository.get_events_by_guild_and_date_range(guild_id, today, end_date)
-        # Only Mission type, unassigned (empty name)
-        return [e for e in events if e.type == "Mission" and not e.name.strip()]
+        result = [e for e in events if e.type == "Mission" and not e.name.strip()]
+        self._event_cache[guild_id] = (result, now)
+        return result
+
+    # ─── Helper: autocomplete cooldown check ───────────────────────────
+    def _is_autocomplete_throttled(self, user_id: int) -> bool:
+        """Return True if we should skip expensive work for this user.
+
+        Updates the timestamp so the *next* call within the cooldown window
+        is the one that gets throttled.
+        """
+        now = time.monotonic()
+        last = self._autocomplete_timestamps.get(user_id, 0.0)
+        if (now - last) < _AUTOCOMPLETE_COOLDOWN_SECONDS:
+            return True
+        self._autocomplete_timestamps[user_id] = now
+        return False
 
     # ─── Helper: find Raid-Helper event post in the events channel ─────
     async def _find_event_post_link(self, guild: discord.Guild, event_date: date) -> str | None:
@@ -414,19 +467,30 @@ class MissionPollCommands(commands.Cog):
             guild = interaction.guild
             if not guild:
                 return []
-            briefing_channel_id = await self._get_briefing_channel_id(guild.id)
+
+            # Debounce: skip DB work if the same user fires again within cooldown
+            if self._is_autocomplete_throttled(interaction.user.id):
+                # Serve from tag cache only (no DB / API calls)
+                return self._filter_framework_choices(current)
+
+            briefing_channel_id = await self._get_briefing_channel_id(guild.id, use_cache=True)
             if not briefing_channel_id:
                 return [app_commands.Choice(name="⚠️ Run /configure first", value="NONE")]
 
             await forum_tag_service.ensure_cache(guild, briefing_channel_id)
-            choices = []
-            for tag_name in forum_tag_service.framework_tags:
-                if current.lower() in tag_name.lower():
-                    choices.append(app_commands.Choice(name=tag_name, value=tag_name))
-            return choices[:25]
+            return self._filter_framework_choices(current)
         except Exception as e:
             logger.error(f"Framework autocomplete error: {e}")
-            return []
+            return self._filter_framework_choices(current)
+
+    @staticmethod
+    def _filter_framework_choices(current: str) -> list[app_commands.Choice[str]]:
+        """Return framework choices from the already-populated tag cache."""
+        choices = []
+        for tag_name in forum_tag_service.framework_tags:
+            if current.lower() in tag_name.lower():
+                choices.append(app_commands.Choice(name=tag_name, value=tag_name))
+        return choices[:25]
 
     # ─── Autocomplete: composition ─────────────────────────────────────
     @missionpoll_command.autocomplete("composition")
@@ -437,19 +501,28 @@ class MissionPollCommands(commands.Cog):
             guild = interaction.guild
             if not guild:
                 return []
-            briefing_channel_id = await self._get_briefing_channel_id(guild.id)
+
+            if self._is_autocomplete_throttled(interaction.user.id):
+                return self._filter_composition_choices(current)
+
+            briefing_channel_id = await self._get_briefing_channel_id(guild.id, use_cache=True)
             if not briefing_channel_id:
                 return [app_commands.Choice(name="⚠️ Run /configure first", value="NONE")]
 
             await forum_tag_service.ensure_cache(guild, briefing_channel_id)
-            choices = [app_commands.Choice(name="All (any composition)", value="All")]
-            for tag_name in forum_tag_service.composition_tags:
-                if current.lower() in tag_name.lower() or not current:
-                    choices.append(app_commands.Choice(name=tag_name, value=tag_name))
-            return choices[:25]
+            return self._filter_composition_choices(current)
         except Exception as e:
             logger.error(f"Composition autocomplete error: {e}")
-            return []
+            return self._filter_composition_choices(current)
+
+    @staticmethod
+    def _filter_composition_choices(current: str) -> list[app_commands.Choice[str]]:
+        """Return composition choices from the already-populated tag cache."""
+        choices = [app_commands.Choice(name="All (any composition)", value="All")]
+        for tag_name in forum_tag_service.composition_tags:
+            if current.lower() in tag_name.lower() or not current:
+                choices.append(app_commands.Choice(name=tag_name, value=tag_name))
+        return choices[:25]
 
     # ─── Autocomplete: event ───────────────────────────────────────────
     @missionpoll_command.autocomplete("event")
@@ -460,7 +533,9 @@ class MissionPollCommands(commands.Cog):
             guild = interaction.guild
             if not guild:
                 return []
-            events = await self._get_upcoming_unassigned_events(guild.id)
+
+            # Use cached event list to avoid DB spam on every keystroke
+            events = await self._get_upcoming_unassigned_events(guild.id, use_cache=True)
             choices = []
             for ev in events:
                 label = f"{format_event_date(ev.date)} — [Unassigned]"
