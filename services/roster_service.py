@@ -218,63 +218,94 @@ async def build_roster_embed(guild_id: int) -> discord.Embed:
         # per user requirements (they must be FH or AAC)
 
     embed = discord.Embed(
-        title="🪖 Platoon Roster",
+        title="🪖  GOL Platoon Roster",
         color=0x2D572C,  # military green
     )
 
-    # ── Header / stats ──
+    # ── Rich description with stats ──
     unix_ts = int(now_uk.timestamp())
-    header = (
-        f"**Total Members:** {total_count}  •  "
-        f"**Active:** {active_count}  •  "
-        f"**Reserves:** {reserve_count}\n"
-        f"Last updated: <t:{unix_ts}:f> (<t:{unix_ts}:R>)\n"
+    description = (
+        "The official personnel roster for **Guild Operations Logistics**.\n"
+        "Members are automatically tracked and updated every hour.\n"
+        "Click any name to view their full profile on the GOL website.\n"
+        "\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "\n"
+        f"👥 **Total Members:** {total_count}\n"
+        f"✅ **Active Duty:** {active_count}\n"
+        f"🔸 **Reserves:** {reserve_count}\n"
+        "\n"
+        f"🕒 Last updated: <t:{unix_ts}:f> (<t:{unix_ts}:R>)\n"
     )
-    embed.description = header
+    embed.description = description
 
     # ── Flying Hellfish section ──
+    fh_header = (
+        "*Our ground force element — infantry, motorised & mechanized infantry, "
+        "vehicle crews and artillery operators.*\n\n"
+    )
     if hellfish:
         lines: list[str] = []
         for m in hellfish:
             lines.append(_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"]))
-        value = "\n".join(lines)
+        value = fh_header + "\n".join(lines)
         if len(value) > 1024:
             value = value[:1000] + "\n*… list truncated*"
-        embed.add_field(
-            name="🐡 1-1 Flying Hellfish",
-            value=value,
-            inline=False,
-        )
+    else:
+        value = fh_header + "*No active members*"
+    embed.add_field(
+        name="🐡  1-1 Flying Hellfish",
+        value=value,
+        inline=False,
+    )
+
+    # ── Spacer ──
+    embed.add_field(name="", value="", inline=False)
 
     # ── AAC section ──
+    aac_header = (
+        "*Support assets — rotary wing, fixed wing & drone operators, "
+        "and Forward Air Controllers (FACs).*\n\n"
+    )
     if aac:
         lines = []
         for m in aac:
             lines.append(_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"]))
-        value = "\n".join(lines)
+        value = aac_header + "\n".join(lines)
         if len(value) > 1024:
             value = value[:1000] + "\n*… list truncated*"
-        embed.add_field(
-            name="✈️ Army Aircorps (AAC)",
-            value=value,
-            inline=False,
-        )
+    else:
+        value = aac_header + "*No active members*"
+    embed.add_field(
+        name="✈️  Army Aircorps (AAC)",
+        value=value,
+        inline=False,
+    )
 
-    # ── Reserves section ──
+    # ── Spacer ──
+    embed.add_field(name="", value="", inline=False)
+
+    # ── Reserves section (top 10 alphabetically, no ranks) ──
+    RESERVE_DISPLAY_LIMIT = 10
     if reserve_members:
         lines = []
-        for m in reserve_members:
-            lines.append(_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"]))
-        value = "\n".join(lines)
+        shown = reserve_members[:RESERVE_DISPLAY_LIMIT]
+        for m in shown:
+            lines.append(_format_member_line(None, m["nickname"], m["on_loa"]))
+        value = "*Personnel on reserve status — not currently active duty.*\n\n"
+        value += "\n".join(lines)
+        remaining = len(reserve_members) - RESERVE_DISPLAY_LIMIT
+        if remaining > 0:
+            value += f"\n\n*… and {remaining} more reserves*"
         if len(value) > 1024:
             value = value[:1000] + "\n*… list truncated*"
         embed.add_field(
-            name="🔸 Reserves",
+            name=f"🔸  Reserves ({reserve_count})",
             value=value,
             inline=False,
         )
 
-    embed.set_footer(text=f"Last updated: {now_uk.strftime('%d-%m-%Y %H:%M')} UK")
+    embed.set_footer(text=f"GOL Platoon Roster  •  Updated {now_uk.strftime('%d-%m-%Y %H:%M')} UK")
     return embed
 
 

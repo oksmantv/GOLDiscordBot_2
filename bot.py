@@ -134,8 +134,53 @@ class GOLBot(commands.Bot):
 
     async def update_loa_message_on_startup(self):
         from services.loa_service import update_summary_message
+        from services.loa_service import (
+            remove_active_role, restore_active_role,
+            send_expiry_dm, delete_loa_announcement,
+            ACTIVE_ROLE_ID, UK_TZ,
+        )
+        from services.loa_repository import loa_repository
+        from services.loa_config_repository import loa_config_repository
+        from datetime import datetime
+
         for guild in self.guilds:
             try:
+                # ── Run expiry logic first (catches LOAs that expired while bot was offline) ──
+                now_uk = datetime.now(UK_TZ)
+                today = now_uk.date()
+                is_notification_hours = 8 <= now_uk.hour <= 16
+                summary_needs_update = False
+
+                active_loas = await loa_repository.get_active_loas_by_guild(guild.id)
+                for loa_entry in active_loas:
+                    # Remove @Active for LOAs that have started
+                    if loa_entry["start_date"] <= today:
+                        await remove_active_role(guild, loa_entry["user_id"])
+
+                    # Expire LOAs whose end date has passed
+                    if loa_entry["end_date"] < today:
+                        await loa_repository.mark_expired(loa_entry["id"])
+                        summary_needs_update = True
+
+                        await delete_loa_announcement(guild, loa_entry)
+
+                        remaining = await loa_repository.get_active_loas_by_user(
+                            guild.id, loa_entry["user_id"]
+                        )
+                        still_on_leave = any(l["start_date"] <= today for l in remaining)
+
+                        role_restored = False
+                        if not still_on_leave:
+                            role_restored = await restore_active_role(guild, loa_entry["user_id"])
+
+                        if is_notification_hours:
+                            await send_expiry_dm(guild, loa_entry, role_restored=role_restored)
+                            await loa_repository.mark_notified(loa_entry["id"])
+
+                if summary_needs_update:
+                    logger.info(f"Expired stale LOAs on startup for guild {guild.name}")
+
+                # ── Rebuild the summary embed ──
                 await update_summary_message(self, guild.id)
                 logger.info(f"Updated LOA summary message for guild {guild.name}")
             except Exception as e:

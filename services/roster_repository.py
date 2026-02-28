@@ -18,7 +18,11 @@ class RosterRepository:
         subgroup: Optional[str],
         on_loa: bool,
     ) -> dict:
-        """Insert or update a roster member."""
+        """Insert or update a roster member.
+
+        ``reserve_since`` is set to NOW() only when the member first
+        transitions to reserve.  It is cleared when they leave reserve.
+        """
         query = """
         INSERT INTO roster_members
             (guild_id, user_id, nickname, rank_prefix, rank_name,
@@ -61,11 +65,11 @@ class RosterRepository:
         return [dict(r) for r in rows]
 
     async def get_reserve_members(self, guild_id: int) -> list[dict]:
-        """Get all reserve roster members ordered by rank."""
+        """Get all reserve roster members ordered alphabetically."""
         query = """
         SELECT * FROM roster_members
         WHERE guild_id = $1 AND is_reserve = TRUE
-        ORDER BY rank_order ASC, nickname ASC;
+        ORDER BY nickname ASC;
         """
         rows = await db_connection.execute_query(query, guild_id)
         return [dict(r) for r in rows]
