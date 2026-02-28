@@ -21,28 +21,30 @@ RESERVE_ROLE_ID   = 600744732104327169
 HELLFISH_ROLE_ID  = 437981613926776832
 AAC_ROLE_ID       = 437981886510530569
 
-# ── Rank definitions (prefix, full name, role ID, sort order) ─────────
+# ── Rank definitions (prefix, full name, role ID, sort order, emoji) ──
 # Lower sort order = higher rank.  Order follows a standard military
 # hierarchy so the embed reads top (highest rank) to bottom (lowest).
 RANKS = [
-    ("1Lt.", "1st Lieutenant",      772212456298512414,   1),
-    ("2Lt.", "2nd Lieutenant",      1214686469642391632,  2),
-    ("Sgt.", "Sergeant",            437982506713874433,   3),
-    ("Cpl.", "Corporal",            437983493864030219,   4),
-    ("LCpl.", "Lance Corporal",     437983720583069698,   5),
-    ("Spc.", "Specialist",          1271423656249004116,  6),
-    ("1CA.", "First Class Airman",  437984886150791188,   7),
-    ("PFC.", "Private 1st Class",   437983988477460500,   8),
-    ("PSC",  "Private 2nd Class",   1271423463395033140,  9),
-    ("Am.",  "Airman",              437985055613124618,  10),
-    ("Pvt.", "Private",             437984103220903949,  11),
-    ("Rct.", "Recruit",             437985345129152520,  12),
+    ("1Lt.", "1st Lieutenant",      772212456298512414,   1, "<:1stLtRank:1477453140273139762>"),
+    ("2Lt.", "2nd Lieutenant",      1214686469642391632,  2, "<:2ndLtRank:1477453141254475807>"),
+    ("Sgt.", "Sergeant",            437982506713874433,   3, "<:Sergeant:1477453150373023917>"),
+    ("Cpl.", "Corporal",            437983493864030219,   4, "<:Corporal:1477453142290333696>"),
+    ("LCpl.", "Lance Corporal",     437983720583069698,   5, "<:Lcpl:1477453143666196701>"),
+    ("Spc.", "Specialist",          1271423656249004116,  6, "<:SPC:1477453152218386492>"),
+    ("1CA.", "First Class Airman",  437984886150791188,   7, None),
+    ("Pfc.", "Private 1st Class",   437983988477460500,   8, "<:Private1stClass:1477453147478954126>"),
+    ("Psc.", "Private 2nd Class",   1271423463395033140,  9, "<:Private_Second_Class:1477453146287505408>"),
+    ("Am.",  "Airman",              437985055613124618,  10, None),
+    ("Pvt.", "Private",             437984103220903949,  11, "<:Private:1477453144899326116>"),
+    ("Rct.", "Recruit",             437985345129152520,  12, "<:Recruit:1477453148686782555>"),
 ]
 
 # Quick lookup sets
 RANK_ROLE_IDS = {r[2] for r in RANKS}
-RANK_BY_ROLE_ID = {r[2]: (r[0], r[1], r[3]) for r in RANKS}  # id -> (prefix, name, order)
+RANK_BY_ROLE_ID = {r[2]: (r[0], r[1], r[3], r[4]) for r in RANKS}  # id -> (prefix, name, order, emoji)
 RANK_PREFIXES = [r[0] for r in RANKS]  # used for stripping from nicknames
+# Emoji lookup by rank prefix
+RANK_EMOJI_BY_PREFIX = {r[0]: r[4] for r in RANKS if r[4]}  # prefix -> emoji string
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -61,7 +63,7 @@ def _extract_name_and_rank(member: discord.Member) -> tuple[str, Optional[str], 
 
     for role in member.roles:
         if role.id in RANK_BY_ROLE_ID:
-            prefix, name, order = RANK_BY_ROLE_ID[role.id]
+            prefix, name, order, _emoji = RANK_BY_ROLE_ID[role.id]
             if order < rank_order:
                 rank_prefix = prefix
                 rank_name = name
@@ -97,14 +99,18 @@ def _format_member_line(
     """Format a single roster line.
 
     Examples:
-        ``Cpl. [Filth](https://gol-clan.com/profile?name=Filth)``
-        ``~~Sgt. [Smith](https://...)~~ (LOA)``
+        ``<:Corporal:123> Cpl. [Filth](https://gol-clan.com/profile?name=Filth)``
+        ``~~<:Sergeant:123> Sgt. [Smith](https://...)~~ (LOA)``
     """
     url = _profile_url(clean_name)
     linked_name = f"[{clean_name}]({url})"
 
     if rank_prefix:
-        name_part = f"{rank_prefix} {linked_name}"
+        emoji = RANK_EMOJI_BY_PREFIX.get(rank_prefix, "")
+        if emoji:
+            name_part = f"{emoji} {rank_prefix} {linked_name}"
+        else:
+            name_part = f"{rank_prefix} {linked_name}"
     else:
         name_part = linked_name
 
@@ -224,8 +230,9 @@ async def build_roster_embed(guild_id: int) -> discord.Embed:
 
     # ── Rich description with stats ──
     unix_ts = int(now_uk.timestamp())
+    GOL_ICON = "<:GOL:985630086487228527>"
     description = (
-        "The official personnel roster for **Guild Operations Logistics**.\n"
+        f"The official personnel roster for {GOL_ICON} **Guerrillas of Liberation**.\n"
         "Members are automatically tracked and updated every hour.\n"
         "Click any name to view their full profile on the GOL website.\n"
         "\n"
