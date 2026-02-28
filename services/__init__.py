@@ -7,6 +7,8 @@ from .forum_tag_service import forum_tag_service
 from .mission_poll_repository import mission_poll_repository
 from .loa_repository import loa_repository
 from .loa_config_repository import loa_config_repository
+from .roster_repository import roster_repository
+from .roster_config_repository import roster_config_repository
 
 __all__ = [
     'db_connection',
@@ -18,4 +20,6 @@ __all__ = [
     'mission_poll_repository',
     'loa_repository',
     'loa_config_repository',
+    'roster_repository',
+    'roster_config_repository',
 ]

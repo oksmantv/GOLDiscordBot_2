@@ -108,6 +108,50 @@ async def initialize_database():
     );
     """
 
+    # ── Platoon Roster tables ──────────────────────────────────────────
+
+    create_roster_config_table_query = """
+    CREATE TABLE IF NOT EXISTS roster_config (
+        guild_id   BIGINT PRIMARY KEY,
+        channel_id BIGINT NOT NULL,
+        message_id BIGINT NOT NULL
+    );
+    """
+
+    create_roster_members_table_query = """
+    CREATE TABLE IF NOT EXISTS roster_members (
+        id          SERIAL PRIMARY KEY,
+        guild_id    BIGINT  NOT NULL,
+        user_id     BIGINT  NOT NULL,
+        nickname    VARCHAR(255) NOT NULL,
+        rank_prefix VARCHAR(10),
+        rank_name   VARCHAR(50),
+        rank_order  INTEGER NOT NULL DEFAULT 999,
+        is_active   BOOLEAN NOT NULL DEFAULT FALSE,
+        is_reserve  BOOLEAN NOT NULL DEFAULT FALSE,
+        subgroup    VARCHAR(50),
+        on_loa      BOOLEAN NOT NULL DEFAULT FALSE,
+        last_seen   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(guild_id, user_id)
+    );
+    """
+
+    create_roster_guild_index_query = """
+    CREATE INDEX IF NOT EXISTS idx_roster_guild
+        ON roster_members (guild_id);
+    """
+
+    create_roster_active_index_query = """
+    CREATE INDEX IF NOT EXISTS idx_roster_guild_active
+        ON roster_members (guild_id) WHERE is_active = TRUE;
+    """
+
+    create_roster_reserve_index_query = """
+    CREATE INDEX IF NOT EXISTS idx_roster_guild_reserve
+        ON roster_members (guild_id) WHERE is_reserve = TRUE;
+    """
+
     try:
         await db_connection.execute_command(create_events_table_query)
         await db_connection.execute_command(create_index_query)
@@ -122,6 +166,11 @@ async def initialize_database():
         await db_connection.execute_command(create_loa_guild_active_index_query)
         await db_connection.execute_command(create_loa_user_active_index_query)
         await db_connection.execute_command(create_loa_config_table_query)
+        await db_connection.execute_command(create_roster_config_table_query)
+        await db_connection.execute_command(create_roster_members_table_query)
+        await db_connection.execute_command(create_roster_guild_index_query)
+        await db_connection.execute_command(create_roster_active_index_query)
+        await db_connection.execute_command(create_roster_reserve_index_query)
         print("Database tables initialized successfully")
         return True
     except Exception as e:

@@ -19,6 +19,7 @@ class GOLBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         intents.guilds = True
+        intents.members = True  # Required for roster member scanning
 
         super().__init__(
             command_prefix=Config.BOT_PREFIX,
@@ -93,6 +94,8 @@ class GOLBot(commands.Bot):
             logger.info("Loaded cancel_poll_command Cog")
             await self.load_extension('commands.loa_command')
             logger.info("Loaded loa_command Cog")
+            await self.load_extension('commands.roster_command')
+            logger.info("Loaded roster_command Cog")
 
             # Print all app commands before syncing
             logger.info(f"App commands before sync: {[cmd.name for cmd in self.tree.get_commands()]} (total: {len(self.tree.get_commands())})")
@@ -138,6 +141,16 @@ class GOLBot(commands.Bot):
             except Exception as e:
                 logger.warning(f"Failed to update LOA summary message for guild {guild.name}: {e}")
 
+    async def update_roster_message_on_startup(self):
+        from services.roster_service import scan_roster, update_roster_message
+        for guild in self.guilds:
+            try:
+                await scan_roster(guild)
+                await update_roster_message(self, guild.id)
+                logger.info(f"Updated Roster message for guild {guild.name}")
+            except Exception as e:
+                logger.warning(f"Failed to update Roster message for guild {guild.name}: {e}")
+
     async def on_ready(self):
         """Called when the bot is ready (also fires on reconnects)."""
         logger.info(f'{self.user} has connected to Discord!')
@@ -166,6 +179,11 @@ class GOLBot(commands.Bot):
 
         # Update LOA summary message on startup
         await self.update_loa_message_on_startup()
+
+        await asyncio.sleep(1)
+
+        # Update roster message on startup
+        await self.update_roster_message_on_startup()
 
     async def on_guild_join(self, guild):
         """Called when the bot joins a new guild."""
