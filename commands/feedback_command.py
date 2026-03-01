@@ -402,14 +402,28 @@ class FeedbackCommands(commands.Cog):
             except Exception as e:
                 logger.warning(f"Could not fetch starter message: {e}")
 
+        # Look up training info for Thursdays
+        training_name = ""
+        instructor_name = ""
+        if target_date.weekday() == 3:  # Thursday
+            from services.event_repository import event_repository as ev_repo
+            training_event = await ev_repo.get_event_by_guild_date_type(
+                guild.id, target_date, "Training"
+            )
+            if training_event:
+                training_name = training_event.name or ""
+                instructor_name = training_event.creator_name or ""
+
         # Update Raid-Helper event
-        success = await raid_helper_service.update_event_from_briefing(
+        error = await raid_helper_service.update_event_from_briefing(
             server_id=guild.id,
             event_date=target_date,
             briefing_thread=briefing_thread,
+            training_name=training_name,
+            instructor_name=instructor_name,
         )
 
-        if success:
+        if not error:
             await interaction.followup.send(
                 f"✅ Updated Raid-Helper event for **{target_date.strftime('%A %d-%m-%Y')}** "
                 f"with briefing from **{briefing_thread.name}**.",
@@ -417,8 +431,7 @@ class FeedbackCommands(commands.Cog):
             )
         else:
             await interaction.followup.send(
-                f"❌ Failed to update Raid-Helper event. Check that the API token is "
-                f"configured and an event exists for {target_date.strftime('%d-%m-%Y')}.",
+                f"❌ Failed to update Raid-Helper event: {error}",
                 ephemeral=True,
             )
 

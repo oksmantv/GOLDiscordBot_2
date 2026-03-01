@@ -163,21 +163,19 @@ class RaidHelperService:
         signups = data.get("signUps", [])
         user_ids = []
 
-        # Substrings that indicate the user did NOT accept
+        # Substrings that indicate the user did NOT accept/attend
         DECLINE_KEYWORDS = (
             "absence", "absent", "decline", "tentative",
-            "not going", "bench", "unavailable", "no",
+            "not going", "bench", "unavailable",
         )
 
         for signup in signups:
-            entry_name = (
-                signup.get("entryName") or signup.get("className") or ""
-            ).strip().lower()
+            class_name = (signup.get("className") or "").strip().lower()
 
-            # Skip if the entry name contains any decline keyword
-            if any(kw in entry_name for kw in DECLINE_KEYWORDS):
+            # Skip if the class name contains any decline keyword
+            if any(kw in class_name for kw in DECLINE_KEYWORDS):
                 logger.debug(
-                    f"Skipping sign-up '{entry_name}' for user {signup.get('userId')}"
+                    f"Skipping sign-up class='{class_name}' for user {signup.get('userId')}"
                 )
                 continue
 
@@ -260,51 +258,52 @@ class RaidHelperService:
             )
             return False
 
-    # ── Briefing parsing ──────────────────────────────────────────────
+    # ── Briefing composition ─────────────────────────────────────────
 
     @staticmethod
-    def parse_briefing_content(content: str, is_thursday: bool) -> str:
-        """Parse a briefing post into a description for Raid-Helper.
+    def build_event_description(
+        briefing_content: str,
+        *,
+        is_thursday: bool,
+        training_name: str = "",
+        instructor_name: str = "",
+    ) -> str:
+        """Build the Raid-Helper event description using fixed headers
+        and dynamic content.
 
-        Expected briefing format:
-            ## Training :training:
-            Training Subject by XXXX
+        Thursday format:
+            ## Training:
+            **{training_name} by {instructor_name}**
 
-            ## Mission :mission:
-            Briefing main post
+            ## Mission Name:
+            {briefing post content}
 
-        On Sundays only the ## Mission :mission: section is expected.
-        Returns the parsed description preserving ## headers and emojis.
+        Sunday format (no training):
+            {briefing post content}
+
+        The briefing_content is the raw starter message from the
+        mission briefing forum thread.
         """
-        if not content or not content.strip():
-            return ""
+        if is_thursday:
+            # Training line
+            training_info = "**TBA**"
+            if training_name and instructor_name:
+                training_info = f"**{training_name} by {instructor_name}**"
+            elif training_name:
+                training_info = f"**{training_name}**"
+            elif instructor_name:
+                training_info = f"**TBA by {instructor_name}**"
 
-        # Split by ## headers (keep the delimiter)
-        sections = re.split(r'(?=^## )', content.strip(), flags=re.MULTILINE)
+            # Mission line
+            mission_info = briefing_content.strip() if briefing_content else "**TBA**"
 
-        training_section = ""
-        mission_section = ""
-
-        for section in sections:
-            stripped = section.strip()
-            if not stripped:
-                continue
-
-            # Match ## Training (with optional emoji syntax)
-            if re.match(r'^## Training\b', stripped, re.IGNORECASE):
-                training_section = stripped
-
-            # Match ## Mission (with optional emoji syntax)
-            elif re.match(r'^## Mission\b', stripped, re.IGNORECASE):
-                mission_section = stripped
-
-        parts = []
-        if is_thursday and training_section:
-            parts.append(training_section)
-        if mission_section:
-            parts.append(mission_section)
-
-        return "\n\n".join(parts)
+            return (
+                f"## Training:\n{training_info}\n\n"
+                f"## Mission Name:\n{mission_info}"
+            )
+        else:
+            # Sunday: just the mission briefing content
+            return briefing_content.strip() if briefing_content else ""
 
     @staticmethod
     def extract_image_from_thread(thread: discord.Thread) -> str | None:
@@ -336,23 +335,34 @@ class RaidHelperService:
         server_id: int,
         event_date: date,
         briefing_thread: discord.Thread,
-    ) -> bool:
-        """Parse a briefing thread and update the matching Raid-Helper event.
+        *,
+        training_name: str = "",
+        instructor_name: str = "",
+    ) -> str:
+        """Compose and update the Raid-Helper event description from a
+        briefing thread and schedule data.
 
         1. Find the Raid-Helper event for the given date.
-        2. Parse the briefing thread's starter message content.
-        3. Extract any attached image.
-        4. PATCH the event with description + image.
+        2. Read the briefing thread's starter message (= mission content).
+        3. Build description with fixed headers + dynamic content.
+        4. Extract any attached image.
+        5. PATCH the event with description + image.
 
-        Returns True on success, False on failure.
+        Args:
+            server_id: Discord guild/server ID.
+            event_date: The event date.
+            briefing_thread: The mission briefing forum thread.
+            training_name: Training event name from schedule (Thursdays).
+            instructor_name: Instructor name from schedule (Thursdays).
+
+        Returns empty string on success, or a descriptive error message on failure.
         """
         # Find Raid-Helper event
         event_id = await self.find_event_id_by_date(server_id, event_date)
         if not event_id:
-            logger.warning(
-                f"Cannot update Raid-Helper event — no event found for {event_date}"
-            )
-            return False
+            msg = f"No Raid-Helper event found for {event_date}"
+            logger.warning(msg)
+            return msg
 
         # Ensure we have the starter message
         starter = briefing_thread.starter_message
@@ -360,20 +370,29 @@ class RaidHelperService:
             try:
                 starter = await briefing_thread.fetch_message(briefing_thread.id)
             except Exception as e:
-                logger.warning(f"Could not fetch starter message for thread {briefing_thread.id}: {e}")
-                return False
+                msg = f"Could not fetch starter message for thread '{briefing_thread.name}': {e}"
+                logger.warning(msg)
+                return msg
 
-        # Parse briefing content
+        briefing_content = starter.content or ""
+        if not briefing_content.strip():
+            msg = f"Briefing thread '{briefing_thread.name}' has no text content"
+            logger.info(msg)
+            return msg
+
+        # Build description
         is_thursday = event_date.weekday() == 3
-        description = self.parse_briefing_content(
-            starter.content or "", is_thursday
+        description = self.build_event_description(
+            briefing_content,
+            is_thursday=is_thursday,
+            training_name=training_name,
+            instructor_name=instructor_name,
         )
 
         if not description:
-            logger.info(
-                f"No parseable briefing content in thread '{briefing_thread.name}'"
-            )
-            return False
+            msg = f"Empty description built from thread '{briefing_thread.name}'"
+            logger.info(msg)
+            return msg
 
         # Extract image
         image_url = self.extract_image_from_thread(briefing_thread)
@@ -388,7 +407,9 @@ class RaidHelperService:
                 f"Updated Raid-Helper event for {event_date} from briefing "
                 f"'{briefing_thread.name}'"
             )
-        return success
+            return ""
+
+        return f"Raid-Helper API PATCH failed for event {event_id}"
 
 
 # Singleton

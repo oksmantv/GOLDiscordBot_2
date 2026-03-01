@@ -773,15 +773,31 @@ class MissionPollCommands(commands.Cog):
             rh_updated = False
             if winning_thread:
                 try:
-                    rh_updated = await raid_helper_service.update_event_from_briefing(
+                    # Look up training info for Thursdays
+                    training_name = ""
+                    instructor_name = ""
+                    if target_event.date.weekday() == 3:  # Thursday
+                        training_event = await event_repository.get_event_by_guild_date_type(
+                            guild.id, target_event.date, "Training"
+                        )
+                        if training_event:
+                            training_name = training_event.name or ""
+                            instructor_name = training_event.creator_name or ""
+
+                    rh_error = await raid_helper_service.update_event_from_briefing(
                         server_id=guild.id,
                         event_date=target_event.date,
                         briefing_thread=winning_thread,
+                        training_name=training_name,
+                        instructor_name=instructor_name,
                     )
+                    rh_updated = not rh_error
                     if rh_updated:
                         logger.info(
                             f"Raid-Helper event updated from briefing '{winning_thread.name}'"
                         )
+                    else:
+                        logger.warning(f"Raid-Helper update failed: {rh_error}")
                 except Exception as e:
                     logger.warning(f"Failed to update Raid-Helper event from briefing: {e}")
 
