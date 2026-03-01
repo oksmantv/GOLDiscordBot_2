@@ -95,21 +95,26 @@ def _format_member_line(
     rank_prefix: Optional[str],
     clean_name: str,
     on_loa: bool,
+    with_link: bool = False,
 ) -> str:
     """Format a single roster line.
 
-    Examples:
-        ``<:Corporal:123> Cpl. Filth``
-        ``~~<:Sergeant:123> Sgt. Smith~~ (LOA)``
+    When *with_link* is True the name is a markdown link to the
+    player's GOL profile.
     """
+    if with_link:
+        display_name = f"[{clean_name}]({_profile_url(clean_name)})"
+    else:
+        display_name = clean_name
+
     if rank_prefix:
         emoji = RANK_EMOJI_BY_PREFIX.get(rank_prefix, "")
         if emoji:
-            name_part = f"{emoji} {rank_prefix} {clean_name}"
+            name_part = f"{emoji} {rank_prefix} {display_name}"
         else:
-            name_part = f"{rank_prefix} {clean_name}"
+            name_part = f"{rank_prefix} {display_name}"
     else:
-        name_part = clean_name
+        name_part = display_name
 
     if on_loa:
         return f"~~{name_part}~~ (LOA)"
@@ -231,15 +236,25 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
         elif m["subgroup"] == "AAC":
             aac.append(m)
 
-    # ━━━━━━━━━━━━━━━━━━━━━  MAIN EMBED  ━━━━━━━━━━━━━━━━━━━━━
-    embed = discord.Embed(
+    # ── Split Hellfish into Leadership and Enlisted ──
+    LEADERSHIP_PREFIXES = {"1Lt.", "2Lt.", "Sgt.", "Cpl."}
+    fh_leadership: list[dict] = []
+    fh_enlisted: list[dict] = []
+    for m in hellfish:
+        if m["rank_prefix"] in LEADERSHIP_PREFIXES:
+            fh_leadership.append(m)
+        else:
+            fh_enlisted.append(m)
+
+    # ━━━━━━━━━━━━━━━━━━━━━  EMBED 1: Header + FH Leadership  ━━━━━━━━━━━━━━━━━
+    embed1 = discord.Embed(
         title="<:GOL_Logo:1477457025972568299>  GOL Platoon Roster",
         url="https://gol-clan.com/orbat",
-        color=0x2D572C,  # military green
+        color=0x2D572C,
     )
 
     unix_ts = int(now_uk.timestamp())
-    description = (
+    embed1.description = (
         f"👥 **Total Members:** {total_count}\n"
         f"✅ **Active Duty:** {active_available}\n"
         f"🟡 **On LOA:** {loa_count}\n"
@@ -247,32 +262,51 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
         "\n"
         f"🕒 Last updated: <t:{unix_ts}:f> (<t:{unix_ts}:R>)\n"
     )
-    embed.description = description
 
-    # ── Flying Hellfish section ──
-    fh_header = (
+    # ── FH Leadership field ──
+    fh_desc = (
         "*Our ground force element — infantry, motorised & mechanized infantry, "
-        "vehicle crews and artillery operators.*\n\n"
+        "vehicle crews and artillery operators.*\n"
     )
-    if hellfish:
-        lines: list[str] = []
-        for m in hellfish:
-            lines.append(_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"]))
-        value = fh_header + "\n".join(lines)
+    embed1.add_field(
+        name="<:flyinghellfish:1477458331047301242>  1-1 Flying Hellfish",
+        value=fh_desc,
+        inline=False,
+    )
+
+    if fh_leadership:
+        lines = [_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"], with_link=True) for m in fh_leadership]
+        value = "\n".join(lines)
         if len(value) > 1024:
             value = value[:1000] + "\n*… list truncated*"
     else:
-        value = fh_header + "*No active members*"
-    embed.add_field(
-        name="<:flyinghellfish:1477458331047301242>  1-1 Flying Hellfish",
+        value = "*No leadership members*"
+    embed1.add_field(
+        name="⭐  Leadership",
         value=value,
         inline=False,
     )
 
-    embed.set_footer(text=f"GOL Platoon Roster  •  Updated {now_uk.strftime('%d-%m-%Y %H:%M')} UK")
+    # ━━━━━━━━━━━━━━━━━━━━━  EMBED 2: FH Enlisted  ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    embed2 = discord.Embed(
+        color=0x2D572C,
+    )
 
-    # ━━━━━━━━━━━━━━━━━━━━━  SECOND EMBED (AAC + Reserves)  ━━━━━━━━━━━━━━━━━━━
-    second_embed = discord.Embed(
+    if fh_enlisted:
+        lines = [_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"], with_link=True) for m in fh_enlisted]
+        value = "\n".join(lines)
+        if len(value) > 1024:
+            value = value[:1000] + "\n*… list truncated*"
+    else:
+        value = "*No enlisted members*"
+    embed2.add_field(
+        name="🎖️  Enlisted",
+        value=value,
+        inline=False,
+    )
+
+    # ━━━━━━━━━━━━━━━━━━━━━  EMBED 3: AAC + Reserves  ━━━━━━━━━━━━━━━━━━━━━━━━
+    embed3 = discord.Embed(
         color=0x2D572C,
     )
 
@@ -282,24 +316,22 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
         "and Forward Air Controllers (FACs).*\n\n"
     )
     if aac:
-        lines = []
-        for m in aac:
-            lines.append(_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"]))
+        lines = [_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"], with_link=True) for m in aac]
         value = aac_header + "\n".join(lines)
         if len(value) > 1024:
             value = value[:1000] + "\n*… list truncated*"
     else:
         value = aac_header + "*No active members*"
-    second_embed.add_field(
+    embed3.add_field(
         name="<:AAC:1477458645481554042>  Army Aircorps (AAC)",
         value=value,
         inline=False,
     )
 
     # ── Spacer ──
-    second_embed.add_field(name="", value="", inline=False)
+    embed3.add_field(name="", value="", inline=False)
 
-    # ── Reserves section ──
+    # ── Reserves section (no links) ──
     RESERVE_DISPLAY_LIMIT = 20
     if reserve_members:
         shown = reserve_members[:RESERVE_DISPLAY_LIMIT]
@@ -317,13 +349,15 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
             body += f"\n\n*… and {remaining} more reserves*"
     else:
         body = "*No reserve members*"
-    second_embed.add_field(
+    embed3.add_field(
         name=f"🔸  Reserves ({reserve_count})",
         value=body,
         inline=False,
     )
 
-    return [embed, second_embed]
+    embed3.set_footer(text=f"GOL Platoon Roster  •  Updated {now_uk.strftime('%d-%m-%Y %H:%M')} UK")
+
+    return [embed1, embed2, embed3]
 
 
 # ── Summary Message Update ─────────────────────────────────────────────
