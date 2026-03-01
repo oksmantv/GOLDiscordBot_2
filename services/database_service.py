@@ -152,6 +152,29 @@ async def initialize_database():
         ON roster_members (guild_id) WHERE is_reserve = TRUE;
     """
 
+    # ── Feedback posts table ────────────────────────────────────────────
+
+    create_feedback_posts_table_query = """
+    CREATE TABLE IF NOT EXISTS feedback_posts (
+        id SERIAL PRIMARY KEY,
+        guild_id BIGINT NOT NULL,
+        event_date DATE NOT NULL,
+        thread_id BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(guild_id, event_date)
+    );
+    """
+
+    create_feedback_posts_index_query = """
+    CREATE INDEX IF NOT EXISTS idx_feedback_posts_guild_date
+        ON feedback_posts (guild_id, event_date);
+    """
+
+    ensure_feedback_channel_id_query = """
+    ALTER TABLE schedule_config
+        ADD COLUMN IF NOT EXISTS feedback_channel_id BIGINT;
+    """
+
     try:
         await db_connection.execute_command(create_events_table_query)
         await db_connection.execute_command(create_index_query)
@@ -171,6 +194,9 @@ async def initialize_database():
         await db_connection.execute_command(create_roster_guild_index_query)
         await db_connection.execute_command(create_roster_active_index_query)
         await db_connection.execute_command(create_roster_reserve_index_query)
+        await db_connection.execute_command(create_feedback_posts_table_query)
+        await db_connection.execute_command(create_feedback_posts_index_query)
+        await db_connection.execute_command(ensure_feedback_channel_id_query)
         print("Database tables initialized successfully")
         return True
     except Exception as e:

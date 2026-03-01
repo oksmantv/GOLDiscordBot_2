@@ -9,6 +9,8 @@ from .loa_repository import loa_repository
 from .loa_config_repository import loa_config_repository
 from .roster_repository import roster_repository
 from .roster_config_repository import roster_config_repository
+from .feedback_repository import feedback_repository
+from .raid_helper_service import raid_helper_service
 
 __all__ = [
     'db_connection',
@@ -22,4 +24,6 @@ __all__ = [
     'loa_config_repository',
     'roster_repository',
     'roster_config_repository',
+    'feedback_repository',
+    'raid_helper_service',
 ]

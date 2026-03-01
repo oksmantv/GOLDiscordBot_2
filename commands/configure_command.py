@@ -24,7 +24,8 @@ class ConfigureCommand(commands.Cog):
         channel_id="Select the channel for schedule updates",
         message_id="Select or create the schedule message in the channel",
         briefing_channel_id="Select the forum channel for mission briefings",
-        log_channel_id="Select the channel for bot log/fallback messages (optional)"
+        log_channel_id="Select the channel for bot log/fallback messages (optional)",
+        feedback_channel_id="Select the forum channel for post-event feedback threads (optional)"
     )
     async def configure(
         self,
@@ -32,7 +33,8 @@ class ConfigureCommand(commands.Cog):
         channel_id: str,
         message_id: str,
         briefing_channel_id: str,
-        log_channel_id: str = None
+        log_channel_id: str = None,
+        feedback_channel_id: str = None
     ):
         print(f"[DEBUG] configure called with: channel_id={channel_id}, message_id={message_id}, briefing_channel_id={briefing_channel_id}")
         print(f"[DEBUG] interaction.guild: {getattr(interaction, 'guild', None)}")
@@ -88,12 +90,24 @@ class ConfigureCommand(commands.Cog):
             except Exception:
                 log_channel_id_int = None
 
+        feedback_channel_id_int = None
+        if feedback_channel_id:
+            try:
+                feedback_channel_id_int = int(feedback_channel_id)
+                fb_ch = interaction.guild.get_channel(feedback_channel_id_int)
+                if not fb_ch or fb_ch.type != discord.ChannelType.forum:
+                    await interaction.followup.send(f"⚠️ Feedback channel must be a forum channel, saving without it.", ephemeral=True)
+                    feedback_channel_id_int = None
+            except Exception:
+                feedback_channel_id_int = None
+
         await schedule_config_repository.set_config(
             interaction.guild.id,
             channel_id_int,
             message_id_int,
             briefing_channel_id_int,
-            log_channel_id_int
+            log_channel_id_int,
+            feedback_channel_id_int
         )
 
         # Populate forum tag cache on configure
@@ -139,6 +153,17 @@ class ConfigureCommand(commands.Cog):
         for channel in guild.text_channels:
             if current.lower() in channel.name.lower():
                 choices.append(app_commands.Choice(name=f"#{channel.name}", value=str(channel.id)))
+        return choices[:25]
+
+    @configure.autocomplete('feedback_channel_id')
+    async def feedback_channel_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        guild = interaction.guild
+        if not guild:
+            return []
+        choices = []
+        for channel in guild.channels:
+            if channel.type == discord.ChannelType.forum and current.lower() in channel.name.lower():
+                choices.append(app_commands.Choice(name=f"# {channel.name}", value=str(channel.id)))
         return choices[:25]
 
     @configure.autocomplete('message_id')

@@ -96,6 +96,8 @@ class GOLBot(commands.Bot):
             logger.info("Loaded loa_command Cog")
             await self.load_extension('commands.roster_command')
             logger.info("Loaded roster_command Cog")
+            await self.load_extension('commands.feedback_command')
+            logger.info("Loaded feedback_command Cog")
 
             # Print all app commands before syncing
             logger.info(f"App commands before sync: {[cmd.name for cmd in self.tree.get_commands()]} (total: {len(self.tree.get_commands())})")
