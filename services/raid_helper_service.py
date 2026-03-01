@@ -272,10 +272,9 @@ class RaidHelperService:
         and dynamic content.
 
         Thursday format:
-            ## Training:
+            ## Training :training:
             **{training_name} by {instructor_name}**
-
-            ## Mission Name:
+            ## Mission :mission:
             {briefing post content}
 
         Sunday format (no training):
@@ -298,8 +297,8 @@ class RaidHelperService:
             mission_info = briefing_content.strip() if briefing_content else "**TBA**"
 
             return (
-                f"## Training:\n{training_info}\n\n"
-                f"## Mission Name:\n{mission_info}"
+                f"## Training <:Training:1173686838926512199>\n{training_info}\n"
+                f"## Mission <:Mission:1173686836451885076>\n{mission_info}"
             )
         else:
             # Sunday: just the mission briefing content
