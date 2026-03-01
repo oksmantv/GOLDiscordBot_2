@@ -225,7 +225,7 @@ class RaidHelperService:
         if description is not None:
             payload["description"] = description
         if image is not None:
-            payload["image"] = image
+            payload.setdefault("advancedSettings", {})["image"] = image
 
         if not payload:
             logger.info("update_event called with nothing to update")
@@ -305,23 +305,21 @@ class RaidHelperService:
             return briefing_content.strip() if briefing_content else ""
 
     @staticmethod
-    def extract_image_from_thread(thread: discord.Thread) -> str | None:
-        """Extract the first image URL from a thread's starter message.
+    def extract_image_from_message(message: discord.Message) -> str | None:
+        """Extract the first image URL from a Discord message.
 
         Checks attachments first, then embed images/thumbnails.
-        Must be called after fetching the starter_message.
         """
-        starter = thread.starter_message
-        if not starter:
+        if not message:
             return None
 
         # Check attachments (uploaded images)
-        for att in starter.attachments:
+        for att in message.attachments:
             if att.content_type and att.content_type.startswith("image/"):
                 return att.url
 
         # Check embeds (linked images)
-        for embed in starter.embeds:
+        for embed in message.embeds:
             if embed.image and embed.image.url:
                 return embed.image.url
             if embed.thumbnail and embed.thumbnail.url:
@@ -393,8 +391,8 @@ class RaidHelperService:
             logger.info(msg)
             return msg
 
-        # Extract image
-        image_url = self.extract_image_from_thread(briefing_thread)
+        # Extract image from the starter message we already fetched
+        image_url = self.extract_image_from_message(starter)
 
         # PATCH the event
         success = await self.update_event(
