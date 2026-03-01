@@ -25,18 +25,18 @@ AAC_ROLE_ID       = 437981886510530569
 # Lower sort order = higher rank.  Order follows a standard military
 # hierarchy so the embed reads top (highest rank) to bottom (lowest).
 RANKS = [
-    ("1Lt.", "1st Lieutenant",      772212456298512414,   1, "<:1stLtRank:1477456471892561972>"),
-    ("2Lt.", "2nd Lieutenant",      1214686469642391632,  2, "<:2ndLtRank:1477456472802725999>"),
-    ("Sgt.", "Sergeant",            437982506713874433,   3, "<:Sergeant:1477456482260750396>"),
-    ("Cpl.", "Corporal",            437983493864030219,   4, "<:Corporal:1477456474174259350>"),
-    ("LCpl.", "Lance Corporal",     437983720583069698,   5, "<:Lance_Corporal:1477456475193475305>"),
+    ("1Lt.", "1st Lieutenant",      772212456298512414,   1, "<:1Lt:1477456471892561972>"),
+    ("2Lt.", "2nd Lieutenant",      1214686469642391632,  2, "<:2Lt:1477456472802725999>"),
+    ("Sgt.", "Sergeant",            437982506713874433,   3, "<:SGT:1477456482260750396>"),
+    ("Cpl.", "Corporal",            437983493864030219,   4, "<:CPL:1477456474174259350>"),
+    ("LCpl.", "Lance Corporal",     437983720583069698,   5, "<:LCPL:1477456475193475305>"),
     ("Spc.", "Specialist",          1271423656249004116,  6, "<:SPC:1477456483343143097>"),
     ("1CA.", "First Class Airman",  437984886150791188,   7, None),
-    ("Pfc.", "Private 1st Class",   437983988477460500,   8, "<:Private1stClass:1477456478033154221>"),
-    ("Psc.", "Private 2nd Class",   1271423463395033140,  9, "<:Private2ndClass:1477456479320670248>"),
+    ("Pfc.", "Private 1st Class",   437983988477460500,   8, "<:PFC:1477456478033154221>"),
+    ("Psc.", "Private 2nd Class",   1271423463395033140,  9, "<:PSC:1477456479320670248>"),
     ("Am.",  "Airman",              437985055613124618,  10, None),
-    ("Pvt.", "Private",             437984103220903949,  11, "<:Private:1477456476757823571>"),
-    ("Rct.", "Recruit",             437985345129152520,  12, "<:Recruit:1477456480767840276>"),
+    ("Pvt.", "Private",             437984103220903949,  11, "<:PVT:1477456476757823571>"),
+    ("Rct.", "Recruit",             437985345129152520,  12, "<:RCT:1477456480767840276>"),
 ]
 
 # Quick lookup sets
