@@ -151,17 +151,21 @@ async def scan_roster(guild: discord.Guild) -> dict:
         is_active  = active_role is not None and active_role in member.roles
         is_reserve = reserve_role is not None and reserve_role in member.roles
 
-        # Determine subgroup (only meaningful for active members)
+        # Determine subgroup — check regardless of active role because
+        # LOA members lose @Active but keep their subgroup role (FH/AAC)
         subgroup: Optional[str] = None
-        if is_active:
-            hellfish_role = guild.get_role(HELLFISH_ROLE_ID)
-            aac_role      = guild.get_role(AAC_ROLE_ID)
-            if hellfish_role and hellfish_role in member.roles:
-                subgroup = "Flying Hellfish"
-            elif aac_role and aac_role in member.roles:
-                subgroup = "AAC"
+        hellfish_role = guild.get_role(HELLFISH_ROLE_ID)
+        aac_role      = guild.get_role(AAC_ROLE_ID)
+        if hellfish_role and hellfish_role in member.roles:
+            subgroup = "Flying Hellfish"
+        elif aac_role and aac_role in member.roles:
+            subgroup = "AAC"
 
         on_loa = member.id in loa_user_ids
+
+        # LOA members with a subgroup should still appear in the active
+        # roster (shown with strikethrough) even though they lose @Active
+        effective_active = is_active or (on_loa and subgroup is not None)
 
         await roster_repository.upsert_member(
             guild_id=guild.id,
@@ -170,7 +174,7 @@ async def scan_roster(guild: discord.Guild) -> dict:
             rank_prefix=rank_prefix,
             rank_name=rank_name,
             rank_order=rank_order,
-            is_active=is_active,
+            is_active=effective_active,
             is_reserve=is_reserve,
             subgroup=subgroup,
             on_loa=on_loa,
