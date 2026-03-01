@@ -102,6 +102,12 @@ class RosterRepository:
         row = await db_connection.execute_single(query, guild_id)
         return row[0] if row else 0
 
+    async def get_loa_count(self, guild_id: int) -> int:
+        """Total on-LOA count (active members currently on leave)."""
+        query = "SELECT COUNT(*) FROM roster_members WHERE guild_id = $1 AND is_active = TRUE AND on_loa = TRUE;"
+        row = await db_connection.execute_single(query, guild_id)
+        return row[0] if row else 0
+
     async def remove_absent_members(self, guild_id: int, present_user_ids: list[int]) -> int:
         """Remove roster entries for users no longer in the guild with @Member.
 

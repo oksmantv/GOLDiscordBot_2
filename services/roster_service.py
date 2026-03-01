@@ -217,6 +217,10 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
     total_count   = await roster_repository.get_member_count(guild_id)
     active_count  = await roster_repository.get_active_count(guild_id)
     reserve_count = await roster_repository.get_reserve_count(guild_id)
+    loa_count     = await roster_repository.get_loa_count(guild_id)
+
+    # active_count includes LOA members; split for clarity
+    active_available = active_count - loa_count
 
     # ── Partition active members by subgroup ──
     hellfish: list[dict] = []
@@ -237,7 +241,8 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
     unix_ts = int(now_uk.timestamp())
     description = (
         f"👥 **Total Members:** {total_count}\n"
-        f"✅ **Active Duty:** {active_count}\n"
+        f"✅ **Active Duty:** {active_available}\n"
+        f"🟡 **On LOA:** {loa_count}\n"
         f"🔸 **Reserves:** {reserve_count}\n"
         "\n"
         f"🕒 Last updated: <t:{unix_ts}:f> (<t:{unix_ts}:R>)\n"
