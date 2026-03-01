@@ -253,7 +253,7 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
 
     # ━━━━━━━━━━━━━━━  EMBED 1: Header + FH Leadership  ━━━━━━━━━━━━━━━
     embed1 = discord.Embed(
-        title="<:GOL_Logo:1477457025972568299>  GOL Platoon Roster",
+        title="<:GOL_Logo:1477457025972568299>GOL Platoon Roster",
         url="https://gol-clan.com/orbat",
         color=0x2D572C,
     )
@@ -270,7 +270,7 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
 
     # ── FH header ──
     embed1.add_field(
-        name="<:flyinghellfish:1477458331047301242>  1-1 Flying Hellfish",
+        name="<:flyinghellfish:1477458331047301242> 1-1 Flying Hellfish",
         value=(
             "*Our ground force element — infantry, motorised & mechanized infantry, "
             "vehicle crews and artillery operators.*"
@@ -287,7 +287,7 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
     else:
         value = "*No leadership members*"
     embed1.add_field(
-        name="⭐  Leadership",
+        name="⭐ Leadership",
         value=value,
         inline=False,
     )
@@ -303,7 +303,7 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
     else:
         value = "*No senior enlisted members*"
     embed2.add_field(
-        name="🎖️  Senior Enlisted",
+        name="🎖️ Senior Enlisted",
         value=value,
         inline=False,
     )
@@ -319,7 +319,7 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
     else:
         value = "*No enlisted members*"
     embed3.add_field(
-        name="🪖  Enlisted",
+        name="🪖 Enlisted",
         value=value,
         inline=False,
     )
@@ -344,7 +344,7 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
             "*No active members*"
         )
     embed4.add_field(
-        name="<:AAC:1477458645481554042>  Army Aircorps (AAC)",
+        name="<:AAC:1477458645481554042> Army Aircorps (AAC)",
         value=value,
         inline=False,
     )
