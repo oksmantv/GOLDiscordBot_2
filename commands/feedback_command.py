@@ -125,7 +125,7 @@ class FeedbackCommands(commands.Cog):
         config = await schedule_config_repository.get_config(guild.id)
         if not config or not config.get("feedback_channel_id"):
             await interaction.followup.send(
-                "❌ No feedback forum channel configured. Run `/configure` first.",
+                "❌ No feedback forum channel configured. Run `/configurefeedback` first.",
                 ephemeral=True,
             )
             return
@@ -163,6 +163,83 @@ class FeedbackCommands(commands.Cog):
                     suggestions.append(app_commands.Choice(name=label, value=value))
 
         return suggestions[:25]
+
+    # ─── /configurefeedback — Admin-only separate configure command ───
+    @app_commands.guilds(Config.GUILD_ID)
+    @app_commands.command(
+        name="configurefeedback",
+        description="Configure the forum channel for post-event feedback threads (admin only)",
+    )
+    @app_commands.describe(
+        feedback_channel_id="Select the forum channel for feedback threads",
+    )
+    async def configurefeedback_command(
+        self,
+        interaction: discord.Interaction,
+        feedback_channel_id: str,
+    ):
+        """Admin-only command to set the feedback forum channel."""
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message(
+                "❌ This command can only be used in a server.", ephemeral=True
+            )
+            return
+
+        # Admin-only
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ Only server admins can use this command.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            channel_id_int = int(feedback_channel_id)
+        except (ValueError, TypeError):
+            await interaction.followup.send("❌ Invalid channel ID.", ephemeral=True)
+            return
+
+        channel = guild.get_channel(channel_id_int)
+        if not channel or channel.type != discord.ChannelType.forum:
+            await interaction.followup.send(
+                "❌ The selected channel must be a forum channel.", ephemeral=True
+            )
+            return
+
+        # Ensure base config exists before updating
+        config = await schedule_config_repository.get_config(guild.id)
+        if not config:
+            await interaction.followup.send(
+                "❌ Base configuration not found. Run `/configure` first to set up "
+                "the schedule channel, then run this command.",
+                ephemeral=True,
+            )
+            return
+
+        await schedule_config_repository.update_feedback_channel(guild.id, channel_id_int)
+        await interaction.followup.send(
+            f"✅ Feedback forum channel set to {channel.mention}. "
+            "Post-event feedback threads will be created here automatically.",
+            ephemeral=True,
+        )
+
+    @configurefeedback_command.autocomplete("feedback_channel_id")
+    async def configurefeedback_channel_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete for forum channels."""
+        guild = interaction.guild
+        if not guild:
+            return []
+        choices = []
+        for channel in guild.channels:
+            if channel.type == discord.ChannelType.forum and current.lower() in channel.name.lower():
+                choices.append(
+                    app_commands.Choice(name=f"# {channel.name}", value=str(channel.id))
+                )
+        return choices[:25]
 
 
 async def setup(bot):

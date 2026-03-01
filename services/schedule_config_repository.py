@@ -2,13 +2,13 @@ from .database_connection import db_connection
 
 class ScheduleConfigRepository:
     """Repository for storing and retrieving schedule config (channel_id, message_id) per guild."""
-    async def set_config(self, guild_id: int, channel_id: int, message_id: int, briefing_channel_id: int, log_channel_id: int = None, feedback_channel_id: int = None):
+    async def set_config(self, guild_id: int, channel_id: int, message_id: int, briefing_channel_id: int, log_channel_id: int = None):
         query = """
-        INSERT INTO schedule_config (guild_id, channel_id, message_id, briefing_channel_id, log_channel_id, feedback_channel_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2, message_id = $3, briefing_channel_id = $4, log_channel_id = $5, feedback_channel_id = $6;
+        INSERT INTO schedule_config (guild_id, channel_id, message_id, briefing_channel_id, log_channel_id)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2, message_id = $3, briefing_channel_id = $4, log_channel_id = $5;
         """
-        await db_connection.execute_command(query, guild_id, channel_id, message_id, briefing_channel_id, log_channel_id, feedback_channel_id)
+        await db_connection.execute_command(query, guild_id, channel_id, message_id, briefing_channel_id, log_channel_id)
 
     async def update_log_channel(self, guild_id: int, log_channel_id: int):
         """Update only the log channel for an existing config."""
