@@ -28,6 +28,7 @@ from services.mission_poll_service import (
 )
 from services.schedule_config_repository import schedule_config_repository
 from services.event_repository import event_repository
+from services.raid_helper_service import raid_helper_service
 
 logger = logging.getLogger(__name__)
 
@@ -768,13 +769,28 @@ class MissionPollCommands(commands.Cog):
                 except Exception as e:
                     logger.warning(f"Failed to delete links embed message: {e}")
 
+            # ── Update Raid-Helper event with briefing content ──
+            rh_updated = False
+            if winning_thread:
+                try:
+                    rh_updated = await raid_helper_service.update_event_from_briefing(
+                        server_id=guild.id,
+                        event_date=target_event.date,
+                        briefing_thread=winning_thread,
+                    )
+                    if rh_updated:
+                        logger.info(
+                            f"Raid-Helper event updated from briefing '{winning_thread.name}'"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to update Raid-Helper event from briefing: {e}")
+
             # ── Find the Raid-Helper event post in the events channel ──
             event_post_link = await self._find_event_post_link(
                 guild, target_event.date
             )
 
             # ── Build announcement ──
-            # Mention the mission thread owner so they know to update the event
             owner_mention = ""
             if winning_thread and winning_thread.owner_id:
                 owner_mention = f"<@{winning_thread.owner_id}>"
@@ -784,7 +800,11 @@ class MissionPollCommands(commands.Cog):
                 f"**{format_event_date(target_event.date)}**"
             )
 
-            if owner_mention:
+            if rh_updated:
+                # Bot auto-updated the Raid-Helper event — no manual action needed
+                announcement += "\n📋 Raid-Helper event updated with briefing content."
+            elif owner_mention:
+                # Auto-update failed — ask the mission author to do it manually
                 if event_post_link:
                     announcement += (
                         f"\n\n{owner_mention} Please update the "

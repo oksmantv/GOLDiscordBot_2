@@ -1,5 +1,7 @@
 import aiohttp
+import discord
 import logging
+import re
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -188,6 +190,193 @@ class RaidHelperService:
         if not event_id:
             return []
         return await self.get_signup_user_ids(event_id)
+
+    # ── Event update (v2, PATCH, requires server token) ───────────────
+
+    async def update_event(
+        self,
+        event_message_id: int,
+        *,
+        description: str | None = None,
+        image: str | None = None,
+    ) -> bool:
+        """Update a Raid-Helper event via PATCH /api/v2/events/{eventId}.
+
+        Supported fields: description, image (URL).
+        Returns True on success, False on failure.
+        """
+        url = f"{RAID_HELPER_API_V2}/events/{event_message_id}"
+        headers = self._auth_headers
+        if not headers:
+            logger.warning("No RAID_HELPER_API_TOKEN configured — cannot update event")
+            return False
+
+        payload: dict = {}
+        if description is not None:
+            payload["description"] = description
+        if image is not None:
+            payload["image"] = image
+
+        if not payload:
+            logger.info("update_event called with nothing to update")
+            return True
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.patch(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status in (200, 204):
+                        logger.info(
+                            f"Updated Raid-Helper event {event_message_id}: "
+                            f"fields={list(payload.keys())}"
+                        )
+                        return True
+                    else:
+                        body = await resp.text()
+                        logger.warning(
+                            f"Raid-Helper PATCH returned {resp.status} "
+                            f"for event {event_message_id}: {body[:300]}"
+                        )
+                        return False
+        except Exception as e:
+            logger.warning(
+                f"Raid-Helper PATCH request failed for event {event_message_id}: {e}"
+            )
+            return False
+
+    # ── Briefing parsing ──────────────────────────────────────────────
+
+    @staticmethod
+    def parse_briefing_content(content: str, is_thursday: bool) -> str:
+        """Parse a briefing post into a description for Raid-Helper.
+
+        Expected briefing format:
+            ## Training :training:
+            Training Subject by XXXX
+
+            ## Mission :mission:
+            Briefing main post
+
+        On Sundays only the ## Mission :mission: section is expected.
+        Returns the parsed description preserving ## headers and emojis.
+        """
+        if not content or not content.strip():
+            return ""
+
+        # Split by ## headers (keep the delimiter)
+        sections = re.split(r'(?=^## )', content.strip(), flags=re.MULTILINE)
+
+        training_section = ""
+        mission_section = ""
+
+        for section in sections:
+            stripped = section.strip()
+            if not stripped:
+                continue
+
+            # Match ## Training (with optional emoji syntax)
+            if re.match(r'^## Training\b', stripped, re.IGNORECASE):
+                training_section = stripped
+
+            # Match ## Mission (with optional emoji syntax)
+            elif re.match(r'^## Mission\b', stripped, re.IGNORECASE):
+                mission_section = stripped
+
+        parts = []
+        if is_thursday and training_section:
+            parts.append(training_section)
+        if mission_section:
+            parts.append(mission_section)
+
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def extract_image_from_thread(thread: discord.Thread) -> str | None:
+        """Extract the first image URL from a thread's starter message.
+
+        Checks attachments first, then embed images/thumbnails.
+        Must be called after fetching the starter_message.
+        """
+        starter = thread.starter_message
+        if not starter:
+            return None
+
+        # Check attachments (uploaded images)
+        for att in starter.attachments:
+            if att.content_type and att.content_type.startswith("image/"):
+                return att.url
+
+        # Check embeds (linked images)
+        for embed in starter.embeds:
+            if embed.image and embed.image.url:
+                return embed.image.url
+            if embed.thumbnail and embed.thumbnail.url:
+                return embed.thumbnail.url
+
+        return None
+
+    async def update_event_from_briefing(
+        self,
+        server_id: int,
+        event_date: date,
+        briefing_thread: discord.Thread,
+    ) -> bool:
+        """Parse a briefing thread and update the matching Raid-Helper event.
+
+        1. Find the Raid-Helper event for the given date.
+        2. Parse the briefing thread's starter message content.
+        3. Extract any attached image.
+        4. PATCH the event with description + image.
+
+        Returns True on success, False on failure.
+        """
+        # Find Raid-Helper event
+        event_id = await self.find_event_id_by_date(server_id, event_date)
+        if not event_id:
+            logger.warning(
+                f"Cannot update Raid-Helper event — no event found for {event_date}"
+            )
+            return False
+
+        # Ensure we have the starter message
+        starter = briefing_thread.starter_message
+        if not starter:
+            try:
+                starter = await briefing_thread.fetch_message(briefing_thread.id)
+            except Exception as e:
+                logger.warning(f"Could not fetch starter message for thread {briefing_thread.id}: {e}")
+                return False
+
+        # Parse briefing content
+        is_thursday = event_date.weekday() == 3
+        description = self.parse_briefing_content(
+            starter.content or "", is_thursday
+        )
+
+        if not description:
+            logger.info(
+                f"No parseable briefing content in thread '{briefing_thread.name}'"
+            )
+            return False
+
+        # Extract image
+        image_url = self.extract_image_from_thread(briefing_thread)
+
+        # PATCH the event
+        success = await self.update_event(
+            event_id, description=description, image=image_url
+        )
+
+        if success:
+            logger.info(
+                f"Updated Raid-Helper event for {event_date} from briefing "
+                f"'{briefing_thread.name}'"
+            )
+        return success
 
 
 # Singleton

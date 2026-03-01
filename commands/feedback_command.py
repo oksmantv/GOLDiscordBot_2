@@ -11,6 +11,8 @@ from services.feedback_service import (
     is_event_day,
 )
 from services.schedule_config_repository import schedule_config_repository
+from services.raid_helper_service import raid_helper_service
+from services.schedule_embed_service import find_briefing_post_link
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +242,201 @@ class FeedbackCommands(commands.Cog):
                     app_commands.Choice(name=f"# {channel.name}", value=str(channel.id))
                 )
         return choices[:25]
+
+    # ─── /updateevent — Manual Raid-Helper event update from briefing ─
+    @app_commands.guilds(Config.GUILD_ID)
+    @app_commands.command(
+        name="updateevent",
+        description="Update a Raid-Helper event with content from its briefing post",
+    )
+    @app_commands.describe(
+        event_date="The event date (DD-MM-YYYY). Defaults to the next upcoming event day.",
+    )
+    async def updateevent_command(
+        self,
+        interaction: discord.Interaction,
+        event_date: str = None,
+    ):
+        """Manually update a Raid-Helper event's description and image from the briefing post."""
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message(
+                "❌ This command can only be used in a server.", ephemeral=True
+            )
+            return
+
+        # Permission check: admin or @Editor
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            member = await guild.fetch_member(interaction.user.id)
+
+        is_admin = any(
+            getattr(r.permissions, "administrator", False) for r in member.roles
+        )
+        has_editor = any(r.name.strip().lower() == "editor" for r in member.roles)
+        if not (is_admin or has_editor):
+            await interaction.response.send_message(
+                "❌ You must be an admin or have the @Editor role to use this command.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        # Parse date
+        target_date: date
+        if event_date:
+            try:
+                parts = event_date.strip().split("-")
+                target_date = date(int(parts[2]), int(parts[1]), int(parts[0]))
+            except (ValueError, IndexError):
+                await interaction.followup.send(
+                    "❌ Invalid date format. Use `DD-MM-YYYY` (e.g. `06-03-2026`).",
+                    ephemeral=True,
+                )
+                return
+        else:
+            # Default to next upcoming event day (Thu or Sun)
+            target_date = date.today()
+            for _ in range(7):
+                if is_event_day(target_date):
+                    break
+                target_date += timedelta(days=1)
+
+        if not is_event_day(target_date):
+            await interaction.followup.send(
+                f"❌ {target_date.strftime('%A %d-%m-%Y')} is not a Thursday or Sunday.",
+                ephemeral=True,
+            )
+            return
+
+        # Find the briefing channel
+        config = await schedule_config_repository.get_config(guild.id)
+        if not config or not config.get("briefing_channel_id"):
+            await interaction.followup.send(
+                "❌ No briefing channel configured. Run `/configure` first.",
+                ephemeral=True,
+            )
+            return
+
+        briefing_channel_id = config["briefing_channel_id"]
+        forum_channel = guild.get_channel(briefing_channel_id)
+        if not forum_channel or forum_channel.type != discord.ChannelType.forum:
+            await interaction.followup.send(
+                "❌ Briefing channel not found or is not a forum channel.",
+                ephemeral=True,
+            )
+            return
+
+        # Get the scheduled event(s) for this date to find the mission name
+        from services.event_repository import event_repository
+
+        events = await event_repository.get_events_by_guild_and_date_range(
+            guild.id, target_date, target_date
+        )
+
+        # Find the mission event
+        mission_event = None
+        for ev in events:
+            if ev.type == "Mission" and ev.name and ev.name.strip():
+                mission_event = ev
+                break
+
+        if not mission_event:
+            await interaction.followup.send(
+                f"❌ No mission scheduled for {target_date.strftime('%A %d-%m-%Y')}. "
+                "Schedule a mission first or wait for the poll to complete.",
+                ephemeral=True,
+            )
+            return
+
+        # Find matching briefing thread by name
+        import asyncio
+
+        try:
+            briefing_link = await asyncio.wait_for(
+                find_briefing_post_link(
+                    guild, briefing_channel_id, mission_event.name, min_ratio=0.6
+                ),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            briefing_link = None
+
+        # We need the actual thread, not just the link — find it directly
+        briefing_thread = None
+        threads = list(forum_channel.threads or [])
+        try:
+            async for thread in forum_channel.archived_threads(limit=100):
+                threads.append(thread)
+        except Exception:
+            pass
+
+        # Match by name (fuzzy)
+        import difflib
+
+        best_match = None
+        best_ratio = 0.0
+        for thread in threads:
+            ratio = difflib.SequenceMatcher(
+                None, thread.name.lower(), mission_event.name.lower()
+            ).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_match = thread
+
+        if best_match and best_ratio >= 0.6:
+            briefing_thread = best_match
+        else:
+            await interaction.followup.send(
+                f"❌ Could not find a briefing post matching **{mission_event.name}** "
+                f"in the briefing forum.",
+                ephemeral=True,
+            )
+            return
+
+        # Ensure starter message is fetched
+        if not briefing_thread.starter_message:
+            try:
+                await briefing_thread.fetch_message(briefing_thread.id)
+            except Exception as e:
+                logger.warning(f"Could not fetch starter message: {e}")
+
+        # Update Raid-Helper event
+        success = await raid_helper_service.update_event_from_briefing(
+            server_id=guild.id,
+            event_date=target_date,
+            briefing_thread=briefing_thread,
+        )
+
+        if success:
+            await interaction.followup.send(
+                f"✅ Updated Raid-Helper event for **{target_date.strftime('%A %d-%m-%Y')}** "
+                f"with briefing from **{briefing_thread.name}**.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                f"❌ Failed to update Raid-Helper event. Check that the API token is "
+                f"configured and an event exists for {target_date.strftime('%d-%m-%Y')}.",
+                ephemeral=True,
+            )
+
+    @updateevent_command.autocomplete("event_date")
+    async def updateevent_date_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        """Suggest upcoming event dates."""
+        today = date.today()
+        suggestions = []
+        for delta in range(-7, 15):
+            d = today + timedelta(days=delta)
+            if is_event_day(d):
+                label = d.strftime("%A %d-%m-%Y")
+                value = d.strftime("%d-%m-%Y")
+                if current.lower() in label.lower() or not current:
+                    suggestions.append(app_commands.Choice(name=label, value=value))
+        return suggestions[:25]
 
 
 async def setup(bot):
