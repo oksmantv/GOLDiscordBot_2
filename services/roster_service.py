@@ -297,7 +297,7 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
 
     if fh_senior:
         lines = [_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"], with_link=True) for m in fh_senior]
-        value = "*Experienced operators forming the backbone of the fighting force.*\n\n" + "\n".join(lines)
+        value = "*Experienced enlisted personnel that assist in forming cohesion and order within the teams.*\n\n" + "\n".join(lines)
         if len(value) > 1024:
             value = value[:1000] + "\n*… list truncated*"
     else:
@@ -313,7 +313,7 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
 
     if fh_enlisted:
         lines = [_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"], with_link=True) for m in fh_enlisted]
-        value = "*The newer members of the platoon, building their skills on the frontline.*\n\n" + "\n".join(lines)
+        value = "*The enlisted members of the platoon, the backbone of any active combat element.*\n\n" + "\n".join(lines)
         if len(value) > 1024:
             value = value[:1000] + "\n*… list truncated*"
     else:
