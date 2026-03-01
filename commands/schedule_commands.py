@@ -146,6 +146,124 @@ class ScheduleCommands(commands.Cog):
             print(f"Autocomplete error: {e}")
             return []
 
+    # ─── /clearschedule ────────────────────────────────────────────────
+
+    @app_commands.guilds(Config.GUILD_ID)
+    @app_commands.command(
+        name="clearschedule",
+        description="Clear/reset a scheduled event (removes name and organizer)",
+    )
+    @app_commands.describe(event="Select the event to clear")
+    async def clearschedule_command(
+        self,
+        interaction: discord.Interaction,
+        event: str,
+    ):
+        """Handle the /clearschedule command."""
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message(
+                "❌ This command can only be used in a server.", ephemeral=True
+            )
+            return
+
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            member = await guild.fetch_member(interaction.user.id)
+        is_admin = any(
+            getattr(r.permissions, "administrator", False) for r in member.roles
+        )
+        has_editor = any(r.name.strip().lower() == "editor" for r in member.roles)
+        if not (is_admin or has_editor):
+            await interaction.response.send_message(
+                "❌ You must be an admin or have the @Editor role to use this command.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer()
+
+        try:
+            available_events = await date_filter_service.get_available_events(
+                search=event
+            )
+            if not available_events:
+                await interaction.followup.send(
+                    "❌ No events found matching your search.", ephemeral=True
+                )
+                return
+
+            selected_event = await date_filter_service.find_event_by_formatted_string(
+                event, available_events
+            )
+            if not selected_event:
+                await interaction.followup.send(
+                    "❌ Selected event not found. Please try again.", ephemeral=True
+                )
+                return
+
+            # Clear the event fields
+            success = await event_repository.update_event(
+                selected_event.id,
+                name="",
+                creator_id=0,
+                creator_name="",
+            )
+
+            if success:
+                # Refresh the schedule embed
+                from services.schedule_config_repository import schedule_config_repository
+                from services.schedule_embed_service import build_schedule_embed
+
+                config = await schedule_config_repository.get_config(guild.id)
+                if config:
+                    channel = guild.get_channel(config["channel_id"])
+                    if channel:
+                        try:
+                            msg = await channel.fetch_message(config["message_id"])
+                            embed = await build_schedule_embed(guild)
+                            await msg.edit(embed=embed)
+                        except Exception as e:
+                            await interaction.followup.send(
+                                f"Event cleared, but failed to update schedule message: {e}",
+                                ephemeral=True,
+                            )
+                            return
+
+                event_date_str = selected_event.date.strftime("%A, %d %B %Y")
+                await interaction.followup.send(
+                    f"✅ **{selected_event.type}** on **{event_date_str}** has been cleared.",
+                )
+            else:
+                await interaction.followup.send(
+                    "❌ Failed to clear event. Please try again later.",
+                    ephemeral=True,
+                )
+        except Exception as e:
+            await interaction.followup.send(
+                f"❌ An error occurred: {str(e)}", ephemeral=True
+            )
+
+    @clearschedule_command.autocomplete("event")
+    async def clearschedule_event_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete for clearschedule event selection."""
+        try:
+            available_events = await date_filter_service.get_available_events(
+                search=current
+            )
+            choices = []
+            for ev in available_events:
+                formatted = date_filter_service.format_event_for_dropdown(ev)
+                choices.append(app_commands.Choice(name=formatted, value=formatted))
+            return choices[:25]
+        except Exception as e:
+            print(f"Autocomplete error: {e}")
+            return []
+
 async def setup(bot):
     """Setup function to add the cog."""
     await bot.add_cog(ScheduleCommands(bot))
