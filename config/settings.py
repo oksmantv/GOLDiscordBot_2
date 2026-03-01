@@ -18,6 +18,9 @@ class Config:
     BOT_PREFIX = os.getenv('BOT_PREFIX', '!')
     DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
     BOT_VERSION = os.getenv('BOT_VERSION', 'v1.0.0')
+
+    # Raid-Helper API (server-level token from https://raid-helper.dev/dashboard)
+    RAID_HELPER_API_TOKEN = os.getenv('RAID_HELPER_API_TOKEN', '')
     
     @classmethod
     def validate_config(cls):

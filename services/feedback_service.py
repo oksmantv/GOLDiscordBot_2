@@ -96,93 +96,22 @@ def get_feedback_template(event_date: date) -> str:
     return SUNDAY_TEMPLATE
 
 
-async def find_raid_helper_message_id(
-    guild: discord.Guild, event_date: date
-) -> Optional[int]:
-    """Find the Raid-Helper event post message ID for a given date.
-
-    Scans the events channel for a Raid-Helper embed matching the date.
-    Returns the message ID (= Raid-Helper event ID) or None.
-    """
-    # Find the events channel by name pattern
-    events_channel = None
-    for ch in guild.text_channels:
-        if "events" in ch.name.lower():
-            events_channel = ch
-            break
-
-    if not events_channel:
-        logger.debug("No events channel found for Raid-Helper lookup")
-        return None
-
-    day_name = event_date.strftime("%A")
-    day_num = event_date.day
-    month_name = event_date.strftime("%B")
-    iso_str = event_date.isoformat()
-
-    search_variants = [
-        f"{day_name}",
-        f"{day_num} {month_name}",
-        f"{month_name} {day_num}",
-        iso_str,
-        event_date.strftime("%d/%m"),
-    ]
-
-    try:
-        async for msg in events_channel.history(limit=50, oldest_first=False):
-            for embed in msg.embeds:
-                haystack = " ".join(
-                    filter(
-                        None,
-                        [
-                            embed.title or "",
-                            embed.description or "",
-                            " ".join(f.name + " " + f.value for f in embed.fields),
-                        ],
-                    )
-                ).lower()
-
-                has_day = day_name.lower() in haystack
-                has_date = any(v.lower() in haystack for v in search_variants[1:])
-                if has_day and has_date:
-                    logger.info(
-                        f"Found Raid-Helper event post for {event_date}: message {msg.id}"
-                    )
-                    return msg.id
-
-            # Also check plain message content
-            if msg.content:
-                content_lower = msg.content.lower()
-                has_day = day_name.lower() in content_lower
-                has_date = any(v.lower() in content_lower for v in search_variants[1:])
-                if has_day and has_date:
-                    logger.info(
-                        f"Found Raid-Helper event post for {event_date}: message {msg.id}"
-                    )
-                    return msg.id
-    except Exception as e:
-        logger.warning(f"Error searching events channel for Raid-Helper post: {e}")
-
-    logger.debug(f"No Raid-Helper event post found for {event_date}")
-    return None
-
-
 async def build_mentions(
     guild: discord.Guild, event_date: date
 ) -> tuple[str, bool]:
     """Build the mentions string for the feedback post.
 
     Returns (mentions_string, used_raid_helper: bool).
-    If Raid-Helper sign-ups are found, mentions each user.
-    Otherwise falls back to mentioning the Leadership role.
+    Uses the Raid-Helper server API to find the event by date,
+    then fetches sign-ups. Falls back to mentioning the Leadership role.
     """
-    rh_message_id = await find_raid_helper_message_id(guild, event_date)
+    user_ids = await raid_helper_service.get_signup_user_ids_by_date(
+        guild.id, event_date
+    )
 
-    if rh_message_id:
-        user_ids = await raid_helper_service.get_signup_user_ids(rh_message_id)
-        if user_ids:
-            mentions = " ".join(f"<@{uid}>" for uid in user_ids)
-            return mentions, True
+    if user_ids:
+        mentions = " ".join(f"<@{uid}>" for uid in user_ids)
+        return mentions, True
 
     # Fallback: mention Leadership role
     leadership_role = discord.utils.get(guild.roles, name="Leadership")
