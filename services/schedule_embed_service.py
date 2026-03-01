@@ -32,7 +32,7 @@ async def build_schedule_embed(guild):
     editors_str = ", ".join(sorted(editors)) if editors else "None"
     instructors_str = ", ".join(sorted(instructors)) if instructors else "None"
     year = today.year
-    GOL_ICON = "<:GOL:985630086487228527>"
+    GOL_ICON = "<:GOL_Logo:1477457025972568299>"
     header = (
         f"# Current Event Rotation: {year}\n"
         f"## :pen_fountain: Editors: {editors_str}\n"

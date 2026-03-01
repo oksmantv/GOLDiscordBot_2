@@ -152,30 +152,60 @@ class GOLBot(commands.Bot):
                 summary_needs_update = False
 
                 active_loas = await loa_repository.get_active_loas_by_guild(guild.id)
+                logger.info(f"[LOA STARTUP] Guild {guild.name}: {len(active_loas)} active LOAs found, today={today}")
+
                 for loa_entry in active_loas:
-                    # Remove @Active for LOAs that have started
-                    if loa_entry["start_date"] <= today:
-                        await remove_active_role(guild, loa_entry["user_id"])
+                    try:
+                        # Ensure date comparison works even if DB returns datetime
+                        end_date = loa_entry["end_date"]
+                        start_date = loa_entry["start_date"]
+                        if hasattr(end_date, 'date'):
+                            end_date = end_date.date()
+                        if hasattr(start_date, 'date'):
+                            start_date = start_date.date()
 
-                    # Expire LOAs whose end date has passed
-                    if loa_entry["end_date"] < today:
-                        await loa_repository.mark_expired(loa_entry["id"])
-                        summary_needs_update = True
-
-                        await delete_loa_announcement(guild, loa_entry)
-
-                        remaining = await loa_repository.get_active_loas_by_user(
-                            guild.id, loa_entry["user_id"]
+                        logger.info(
+                            f"[LOA STARTUP] LOA #{loa_entry['id']} user={loa_entry['user_id']} "
+                            f"start={start_date} end={end_date} "
+                            f"expired={loa_entry['expired']} end<today={end_date < today}"
                         )
-                        still_on_leave = any(l["start_date"] <= today for l in remaining)
 
-                        role_restored = False
-                        if not still_on_leave:
-                            role_restored = await restore_active_role(guild, loa_entry["user_id"])
+                        # Remove @Active for LOAs that have started
+                        if start_date <= today:
+                            await remove_active_role(guild, loa_entry["user_id"])
 
-                        if is_notification_hours:
-                            await send_expiry_dm(guild, loa_entry, role_restored=role_restored)
-                            await loa_repository.mark_notified(loa_entry["id"])
+                        # Expire LOAs whose end date has passed
+                        if end_date < today:
+                            logger.info(f"[LOA STARTUP] Expiring LOA #{loa_entry['id']}")
+                            await loa_repository.mark_expired(loa_entry["id"])
+                            summary_needs_update = True
+
+                            try:
+                                await delete_loa_announcement(guild, loa_entry)
+                            except Exception as e:
+                                logger.warning(f"[LOA STARTUP] Failed to delete announcement for LOA #{loa_entry['id']}: {e}")
+
+                            remaining = await loa_repository.get_active_loas_by_user(
+                                guild.id, loa_entry["user_id"]
+                            )
+                            still_on_leave = any(
+                                (l["start_date"].date() if hasattr(l["start_date"], 'date') else l["start_date"]) <= today
+                                for l in remaining
+                            )
+
+                            role_restored = False
+                            if not still_on_leave:
+                                role_restored = await restore_active_role(guild, loa_entry["user_id"])
+
+                            if is_notification_hours:
+                                try:
+                                    await send_expiry_dm(guild, loa_entry, role_restored=role_restored)
+                                except Exception as e:
+                                    logger.warning(f"[LOA STARTUP] Failed to send expiry DM for LOA #{loa_entry['id']}: {e}")
+                                await loa_repository.mark_notified(loa_entry["id"])
+                            logger.info(f"[LOA STARTUP] LOA #{loa_entry['id']} expired successfully")
+                    except Exception as e:
+                        logger.error(f"[LOA STARTUP] Error processing LOA #{loa_entry.get('id', '?')}: {e}", exc_info=True)
 
                 if summary_needs_update:
                     logger.info(f"Expired stale LOAs on startup for guild {guild.name}")
@@ -184,7 +214,7 @@ class GOLBot(commands.Bot):
                 await update_summary_message(self, guild.id)
                 logger.info(f"Updated LOA summary message for guild {guild.name}")
             except Exception as e:
-                logger.warning(f"Failed to update LOA summary message for guild {guild.name}: {e}")
+                logger.error(f"Failed to update LOA on startup for guild {guild.name}: {e}", exc_info=True)
 
     async def update_roster_message_on_startup(self):
         from services.roster_service import scan_roster, update_roster_message

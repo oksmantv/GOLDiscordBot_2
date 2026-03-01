@@ -7,7 +7,7 @@ from config import Config
 from services.roster_config_repository import roster_config_repository
 from services.roster_service import (
     scan_roster,
-    build_roster_embed,
+    build_roster_embeds,
     update_roster_message,
 )
 
@@ -62,9 +62,9 @@ class RosterCommands(commands.Cog):
         )
         summary = await scan_roster(guild)
 
-        # ── Post the roster embed ──
-        embed = await build_roster_embed(guild.id)
-        msg = await channel.send(embed=embed)
+        # ── Post the roster embeds ──
+        embeds = await build_roster_embeds(guild.id)
+        msg = await channel.send(embeds=embeds)
 
         # ── Save config ──
         await roster_config_repository.set_config(guild.id, channel.id, msg.id)

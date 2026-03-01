@@ -25,18 +25,18 @@ AAC_ROLE_ID       = 437981886510530569
 # Lower sort order = higher rank.  Order follows a standard military
 # hierarchy so the embed reads top (highest rank) to bottom (lowest).
 RANKS = [
-    ("1Lt.", "1st Lieutenant",      772212456298512414,   1, "<:1stLtRank:1477453140273139762>"),
-    ("2Lt.", "2nd Lieutenant",      1214686469642391632,  2, "<:2ndLtRank:1477453141254475807>"),
-    ("Sgt.", "Sergeant",            437982506713874433,   3, "<:Sergeant:1477453150373023917>"),
-    ("Cpl.", "Corporal",            437983493864030219,   4, "<:Corporal:1477453142290333696>"),
-    ("LCpl.", "Lance Corporal",     437983720583069698,   5, "<:Lcpl:1477453143666196701>"),
-    ("Spc.", "Specialist",          1271423656249004116,  6, "<:SPC:1477453152218386492>"),
+    ("1Lt.", "1st Lieutenant",      772212456298512414,   1, "<:1stLtRank:1477456471892561972>"),
+    ("2Lt.", "2nd Lieutenant",      1214686469642391632,  2, "<:2ndLtRank:1477456472802725999>"),
+    ("Sgt.", "Sergeant",            437982506713874433,   3, "<:Sergeant:1477456482260750396>"),
+    ("Cpl.", "Corporal",            437983493864030219,   4, "<:Corporal:1477456474174259350>"),
+    ("LCpl.", "Lance Corporal",     437983720583069698,   5, "<:Lance_Corporal:1477456475193475305>"),
+    ("Spc.", "Specialist",          1271423656249004116,  6, "<:SPC:1477456483343143097>"),
     ("1CA.", "First Class Airman",  437984886150791188,   7, None),
-    ("Pfc.", "Private 1st Class",   437983988477460500,   8, "<:Private1stClass:1477453147478954126>"),
-    ("Psc.", "Private 2nd Class",   1271423463395033140,  9, "<:Private_Second_Class:1477453146287505408>"),
+    ("Pfc.", "Private 1st Class",   437983988477460500,   8, "<:Private1stClass:1477456478033154221>"),
+    ("Psc.", "Private 2nd Class",   1271423463395033140,  9, "<:Private2ndClass:1477456479320670248>"),
     ("Am.",  "Airman",              437985055613124618,  10, None),
-    ("Pvt.", "Private",             437984103220903949,  11, "<:Private:1477453144899326116>"),
-    ("Rct.", "Recruit",             437985345129152520,  12, "<:Recruit:1477453148686782555>"),
+    ("Pvt.", "Private",             437984103220903949,  11, "<:Private:1477456476757823571>"),
+    ("Rct.", "Recruit",             437985345129152520,  12, "<:Recruit:1477456480767840276>"),
 ]
 
 # Quick lookup sets
@@ -201,8 +201,13 @@ async def scan_roster(guild: discord.Guild) -> dict:
 
 # ── Embed Builder ──────────────────────────────────────────────────────
 
-async def build_roster_embed(guild_id: int) -> discord.Embed:
-    """Build the Platoon Roster embed from the database."""
+async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
+    """Build the Platoon Roster embeds from the database.
+
+    Returns a list of embeds: the main roster (Active) and a separate
+    Reserve embed.  Splitting reserves into their own embed avoids
+    field-length truncation on the main roster.
+    """
     now_uk = datetime.now(UK_TZ)
 
     active_members  = await roster_repository.get_active_members(guild_id)
@@ -220,17 +225,15 @@ async def build_roster_embed(guild_id: int) -> discord.Embed:
             hellfish.append(m)
         elif m["subgroup"] == "AAC":
             aac.append(m)
-        # Members without a subgroup are excluded from the active roster
-        # per user requirements (they must be FH or AAC)
 
+    # ━━━━━━━━━━━━━━━━━━━━━  MAIN EMBED  ━━━━━━━━━━━━━━━━━━━━━
     embed = discord.Embed(
         title="🪖  GOL Platoon Roster",
         color=0x2D572C,  # military green
     )
 
-    # ── Rich description with stats ──
     unix_ts = int(now_uk.timestamp())
-    GOL_ICON = "<:GOL:985630086487228527>"
+    GOL_ICON = "<:GOL_Logo:1477457025972568299>"
     description = (
         f"The official personnel roster for {GOL_ICON} **Guerrillas of Liberation**.\n"
         "Members are automatically tracked and updated every hour.\n"
@@ -261,7 +264,7 @@ async def build_roster_embed(guild_id: int) -> discord.Embed:
     else:
         value = fh_header + "*No active members*"
     embed.add_field(
-        name="🐡  1-1 Flying Hellfish",
+        name="<:flyinghellfish:1477458331047301242>  1-1 Flying Hellfish",
         value=value,
         inline=False,
     )
@@ -284,36 +287,39 @@ async def build_roster_embed(guild_id: int) -> discord.Embed:
     else:
         value = aac_header + "*No active members*"
     embed.add_field(
-        name="✈️  Army Aircorps (AAC)",
+        name="<:AAC:1477458645481554042>  Army Aircorps (AAC)",
         value=value,
         inline=False,
     )
 
-    # ── Spacer ──
-    embed.add_field(name="", value="", inline=False)
+    embed.set_footer(text=f"GOL Platoon Roster  •  Updated {now_uk.strftime('%d-%m-%Y %H:%M')} UK")
 
-    # ── Reserves section (top 10 alphabetically, no ranks) ──
+    # ━━━━━━━━━━━━━━━━━━━━━  RESERVE EMBED  ━━━━━━━━━━━━━━━━━━━
+    reserve_embed = discord.Embed(
+        title=f"🔸  Reserves ({reserve_count})",
+        color=0x2D572C,
+    )
+
     RESERVE_DISPLAY_LIMIT = 10
     if reserve_members:
-        lines = []
         shown = reserve_members[:RESERVE_DISPLAY_LIMIT]
+        lines = []
         for m in shown:
-            lines.append(_format_member_line(None, m["nickname"], m["on_loa"]))
-        value = "*Personnel on reserve status — not currently active duty.*\n\n"
-        value += "\n".join(lines)
+            name = m["nickname"]
+            if m["on_loa"]:
+                lines.append(f"~~{name}~~ (LOA)")
+            else:
+                lines.append(name)
+        body = "*Personnel on reserve status — not currently active duty.*\n\n"
+        body += "\n".join(lines)
         remaining = len(reserve_members) - RESERVE_DISPLAY_LIMIT
         if remaining > 0:
-            value += f"\n\n*… and {remaining} more reserves*"
-        if len(value) > 1024:
-            value = value[:1000] + "\n*… list truncated*"
-        embed.add_field(
-            name=f"🔸  Reserves ({reserve_count})",
-            value=value,
-            inline=False,
-        )
+            body += f"\n\n*… and {remaining} more reserves*"
+    else:
+        body = "*No reserve members*"
+    reserve_embed.description = body
 
-    embed.set_footer(text=f"GOL Platoon Roster  •  Updated {now_uk.strftime('%d-%m-%Y %H:%M')} UK")
-    return embed
+    return [embed, reserve_embed]
 
 
 # ── Summary Message Update ─────────────────────────────────────────────
@@ -332,14 +338,14 @@ async def update_roster_message(bot: discord.Client, guild_id: int) -> None:
     if not channel:
         return
 
-    embed = await build_roster_embed(guild_id)
+    embeds = await build_roster_embeds(guild_id)
 
     try:
         msg = await channel.fetch_message(config["message_id"])
-        await msg.edit(embed=embed)
+        await msg.edit(embeds=embeds)
     except discord.NotFound:
         # Message was deleted — recreate it
-        msg = await channel.send(embed=embed)
+        msg = await channel.send(embeds=embeds)
         await roster_config_repository.set_config(guild_id, config["channel_id"], msg.id)
     except Exception as e:
         logger.error(f"Failed to update Roster embed message: {e}")

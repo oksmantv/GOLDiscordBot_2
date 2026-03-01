@@ -397,52 +397,74 @@ class LOACommands(commands.Cog):
                 summary_needs_update = False
 
                 active_loas = await loa_repository.get_active_loas_by_guild(guild_id)
+                logger.info(f"[LOA LOOP] Guild {guild.name}: {len(active_loas)} active LOAs, today={today}")
 
                 for loa_entry in active_loas:
-                    # 1. Remove @Active for LOAs that have started
-                    if loa_entry["start_date"] <= today:
-                        await remove_active_role(guild, loa_entry["user_id"])
+                    try:
+                        # Ensure date comparison works even if DB returns datetime
+                        end_date = loa_entry["end_date"]
+                        start_date = loa_entry["start_date"]
+                        if hasattr(end_date, 'date'):
+                            end_date = end_date.date()
+                        if hasattr(start_date, 'date'):
+                            start_date = start_date.date()
 
-                    # 2. Expire LOAs whose end date has passed
-                    if loa_entry["end_date"] < today:
-                        await loa_repository.mark_expired(loa_entry["id"])
-                        summary_needs_update = True
+                        # 1. Remove @Active for LOAs that have started
+                        if start_date <= today:
+                            await remove_active_role(guild, loa_entry["user_id"])
 
-                        # Delete announcement embed
-                        await delete_loa_announcement(guild, loa_entry)
-
-                        # Check for other active LOAs before restoring role
-                        remaining = await loa_repository.get_active_loas_by_user(
-                            guild_id, loa_entry["user_id"]
-                        )
-                        still_on_leave = any(
-                            l["start_date"] <= today for l in remaining
-                        )
-
-                        role_restored = False
-                        if not still_on_leave:
-                            role_restored = await restore_active_role(
-                                guild, loa_entry["user_id"]
+                        # 2. Expire LOAs whose end date has passed
+                        if end_date < today:
+                            logger.info(
+                                f"[LOA LOOP] Expiring LOA #{loa_entry['id']} "
+                                f"user={loa_entry['user_id']} end={end_date}"
                             )
+                            await loa_repository.mark_expired(loa_entry["id"])
+                            summary_needs_update = True
 
-                        # DM notification — only during UK 08:00-16:00
-                        if is_notification_hours:
-                            await send_expiry_dm(
-                                guild, loa_entry, role_restored=role_restored
-                            )
-                            await loa_repository.mark_notified(loa_entry["id"])
-                        else:
-                            # If user left the server, mark notified anyway
+                            # Delete announcement embed
                             try:
-                                await guild.fetch_member(loa_entry["user_id"])
-                            except (discord.NotFound, discord.HTTPException):
+                                await delete_loa_announcement(guild, loa_entry)
+                            except Exception as e:
+                                logger.warning(f"[LOA LOOP] Failed to delete announcement for LOA #{loa_entry['id']}: {e}")
+
+                            # Check for other active LOAs before restoring role
+                            remaining = await loa_repository.get_active_loas_by_user(
+                                guild_id, loa_entry["user_id"]
+                            )
+                            still_on_leave = any(
+                                (l["start_date"].date() if hasattr(l["start_date"], 'date') else l["start_date"]) <= today
+                                for l in remaining
+                            )
+
+                            role_restored = False
+                            if not still_on_leave:
+                                role_restored = await restore_active_role(
+                                    guild, loa_entry["user_id"]
+                                )
+
+                            # DM notification — only during UK 08:00-16:00
+                            if is_notification_hours:
+                                try:
+                                    await send_expiry_dm(
+                                        guild, loa_entry, role_restored=role_restored
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"[LOA LOOP] Failed to send expiry DM for LOA #{loa_entry['id']}: {e}")
                                 await loa_repository.mark_notified(loa_entry["id"])
+                            else:
+                                # If user left the server, mark notified anyway
+                                try:
+                                    await guild.fetch_member(loa_entry["user_id"])
+                                except (discord.NotFound, discord.HTTPException):
+                                    await loa_repository.mark_notified(loa_entry["id"])
+                    except Exception as e:
+                        logger.error(f"[LOA LOOP] Error processing LOA #{loa_entry.get('id', '?')}: {e}", exc_info=True)
 
                 # 3. Send pending DM notifications for previously expired LOAs
                 if is_notification_hours:
                     unnotified = await loa_repository.get_expired_unnotified(guild_id)
                     for loa_entry in unnotified:
-                        # Check current role state for accurate DM text
                         try:
                             member = await guild.fetch_member(loa_entry["user_id"])
                             active_role = guild.get_role(ACTIVE_ROLE_ID)
@@ -452,9 +474,12 @@ class LOACommands(commands.Cog):
                         except (discord.NotFound, discord.HTTPException):
                             has_active = False
 
-                        await send_expiry_dm(
-                            guild, loa_entry, role_restored=has_active
-                        )
+                        try:
+                            await send_expiry_dm(
+                                guild, loa_entry, role_restored=has_active
+                            )
+                        except Exception as e:
+                            logger.warning(f"[LOA LOOP] Failed to send expiry DM for unnotified LOA #{loa_entry['id']}: {e}")
                         await loa_repository.mark_notified(loa_entry["id"])
 
                 # 4. Update summary if anything changed
