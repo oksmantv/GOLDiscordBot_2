@@ -151,8 +151,10 @@ class RaidHelperService:
     async def get_signup_user_ids(self, event_message_id: int) -> list[int]:
         """Return a list of Discord user IDs who signed up to a Raid-Helper event.
 
-        Filters to only include confirmed sign-ups (excludes Absence,
-        Tentative, Decline, etc.).
+        Filters to only include confirmed/accepted sign-ups.
+        Excludes: Absence, Decline, Tentative, Bench, and any custom
+        "declined" choices.  Uses a blocklist approach with broad matching
+        so custom choice names like "Declined" are caught.
         """
         data = await self.get_event(event_message_id)
         if not data:
@@ -160,15 +162,25 @@ class RaidHelperService:
 
         signups = data.get("signUps", [])
         user_ids = []
+
+        # Substrings that indicate the user did NOT accept
+        DECLINE_KEYWORDS = (
+            "absence", "absent", "decline", "tentative",
+            "not going", "bench", "unavailable", "no",
+        )
+
         for signup in signups:
             entry_name = (
                 signup.get("entryName") or signup.get("className") or ""
-            ).lower()
-            # Skip absence / decline / tentative entries
-            if entry_name in (
-                "absence", "tentative", "decline", "not going", "bench",
-            ):
+            ).strip().lower()
+
+            # Skip if the entry name contains any decline keyword
+            if any(kw in entry_name for kw in DECLINE_KEYWORDS):
+                logger.debug(
+                    f"Skipping sign-up '{entry_name}' for user {signup.get('userId')}"
+                )
                 continue
+
             user_id = signup.get("userId") or signup.get("id")
             if user_id:
                 try:
