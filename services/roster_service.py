@@ -260,12 +260,8 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
         inline=False,
     )
 
-    embed.set_footer(text=f"GOL Platoon Roster  •  Updated {now_uk.strftime('%d-%m-%Y %H:%M')} UK")
-
-    # ━━━━━━━━━━━━━━━━━━━━━  SECOND EMBED (AAC + Reserves)  ━━━━━━━━━━━━━━━━━━━
-    second_embed = discord.Embed(
-        color=0x2D572C,
-    )
+    # ── Spacer ──
+    embed.add_field(name="", value="", inline=False)
 
     # ── AAC section ──
     aac_header = (
@@ -281,17 +277,20 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
             value = value[:1000] + "\n*… list truncated*"
     else:
         value = aac_header + "*No active members*"
-    second_embed.add_field(
+    embed.add_field(
         name="<:AAC:1477458645481554042>  Army Aircorps (AAC)",
         value=value,
         inline=False,
     )
 
-    # ── Spacer ──
-    second_embed.add_field(name="", value="", inline=False)
+    embed.set_footer(text=f"GOL Platoon Roster  •  Updated {now_uk.strftime('%d-%m-%Y %H:%M')} UK")
 
-    # ── Reserves section ──
-    RESERVE_DISPLAY_LIMIT = 10
+    # ━━━━━━━━━━━━━━━━━━━━━  RESERVE EMBED  ━━━━━━━━━━━━━━━━━━━
+    reserve_embed = discord.Embed(
+        color=0x2D572C,
+    )
+
+    RESERVE_DISPLAY_LIMIT = 20
     if reserve_members:
         shown = reserve_members[:RESERVE_DISPLAY_LIMIT]
         lines = []
@@ -308,13 +307,13 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
             body += f"\n\n*… and {remaining} more reserves*"
     else:
         body = "*No reserve members*"
-    second_embed.add_field(
+    reserve_embed.add_field(
         name=f"🔸  Reserves ({reserve_count})",
         value=body,
         inline=False,
     )
 
-    return [embed, second_embed]
+    return [embed, reserve_embed]
 
 
 # ── Summary Message Update ─────────────────────────────────────────────
