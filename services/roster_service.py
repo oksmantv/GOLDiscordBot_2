@@ -99,20 +99,17 @@ def _format_member_line(
     """Format a single roster line.
 
     Examples:
-        ``<:Corporal:123> Cpl. [Filth](https://gol-clan.com/profile?name=Filth)``
-        ``~~<:Sergeant:123> Sgt. [Smith](https://...)~~ (LOA)``
+        ``<:Corporal:123> Cpl. Filth``
+        ``~~<:Sergeant:123> Sgt. Smith~~ (LOA)``
     """
-    url = _profile_url(clean_name)
-    linked_name = f"[{clean_name}]({url})"
-
     if rank_prefix:
         emoji = RANK_EMOJI_BY_PREFIX.get(rank_prefix, "")
         if emoji:
-            name_part = f"{emoji} {rank_prefix} {linked_name}"
+            name_part = f"{emoji} {rank_prefix} {clean_name}"
         else:
-            name_part = f"{rank_prefix} {linked_name}"
+            name_part = f"{rank_prefix} {clean_name}"
     else:
-        name_part = linked_name
+        name_part = clean_name
 
     if on_loa:
         return f"~~{name_part}~~ (LOA)"
@@ -228,19 +225,13 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
 
     # ━━━━━━━━━━━━━━━━━━━━━  MAIN EMBED  ━━━━━━━━━━━━━━━━━━━━━
     embed = discord.Embed(
-        title="🪖  GOL Platoon Roster",
+        title="<:GOL_Logo:1477457025972568299>  GOL Platoon Roster",
+        url="https://gol-clan.com/orbat",
         color=0x2D572C,  # military green
     )
 
     unix_ts = int(now_uk.timestamp())
-    GOL_ICON = "<:GOL_Logo:1477457025972568299>"
     description = (
-        f"The official personnel roster for {GOL_ICON} **Guerrillas of Liberation**.\n"
-        "Members are automatically tracked and updated every hour.\n"
-        "Click any name to view their full profile on the GOL website.\n"
-        "\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "\n"
         f"👥 **Total Members:** {total_count}\n"
         f"✅ **Active Duty:** {active_count}\n"
         f"🔸 **Reserves:** {reserve_count}\n"
