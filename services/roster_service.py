@@ -100,7 +100,8 @@ def _format_member_line(
     """Format a single roster line.
 
     When *with_link* is True the name is a markdown link to the
-    player's GOL profile.
+    player's GOL profile.  The rank prefix text is omitted when a
+    rank emoji is available (the emoji alone conveys the rank).
     """
     if with_link:
         display_name = f"[{clean_name}]({_profile_url(clean_name)})"
@@ -110,7 +111,7 @@ def _format_member_line(
     if rank_prefix:
         emoji = RANK_EMOJI_BY_PREFIX.get(rank_prefix, "")
         if emoji:
-            name_part = f"{emoji} {rank_prefix} {display_name}"
+            name_part = f"{emoji} {display_name}"
         else:
             name_part = f"{rank_prefix} {display_name}"
     else:
@@ -236,17 +237,21 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
         elif m["subgroup"] == "AAC":
             aac.append(m)
 
-    # ── Split Hellfish into Leadership and Enlisted ──
+    # ── Split Hellfish into Leadership, Senior Enlisted, Enlisted ──
     LEADERSHIP_PREFIXES = {"1Lt.", "2Lt.", "Sgt.", "Cpl."}
+    SENIOR_ENLISTED_PREFIXES = {"LCpl.", "Spc.", "Pfc."}
     fh_leadership: list[dict] = []
+    fh_senior: list[dict] = []
     fh_enlisted: list[dict] = []
     for m in hellfish:
         if m["rank_prefix"] in LEADERSHIP_PREFIXES:
             fh_leadership.append(m)
+        elif m["rank_prefix"] in SENIOR_ENLISTED_PREFIXES:
+            fh_senior.append(m)
         else:
             fh_enlisted.append(m)
 
-    # ━━━━━━━━━━━━━━━━━━━━━  EMBED 1: Header + FH Leadership  ━━━━━━━━━━━━━━━━━
+    # ━━━━━━━━━━━━━━━  EMBED 1: Header + FH Leadership  ━━━━━━━━━━━━━━━
     embed1 = discord.Embed(
         title="<:GOL_Logo:1477457025972568299>  GOL Platoon Roster",
         url="https://gol-clan.com/orbat",
@@ -263,20 +268,20 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
         f"🕒 Last updated: <t:{unix_ts}:f> (<t:{unix_ts}:R>)\n"
     )
 
-    # ── FH Leadership field ──
-    fh_desc = (
-        "*Our ground force element — infantry, motorised & mechanized infantry, "
-        "vehicle crews and artillery operators.*\n"
-    )
+    # ── FH header ──
     embed1.add_field(
         name="<:flyinghellfish:1477458331047301242>  1-1 Flying Hellfish",
-        value=fh_desc,
+        value=(
+            "*Our ground force element — infantry, motorised & mechanized infantry, "
+            "vehicle crews and artillery operators.*"
+        ),
         inline=False,
     )
 
+    # ── Leadership ──
     if fh_leadership:
         lines = [_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"], with_link=True) for m in fh_leadership]
-        value = "\n".join(lines)
+        value = "*Officers and NCOs responsible for command, tactics and squad coordination.*\n\n" + "\n".join(lines)
         if len(value) > 1024:
             value = value[:1000] + "\n*… list truncated*"
     else:
@@ -287,49 +292,65 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
         inline=False,
     )
 
-    # ━━━━━━━━━━━━━━━━━━━━━  EMBED 2: FH Enlisted  ━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    embed2 = discord.Embed(
-        color=0x2D572C,
-    )
+    # ━━━━━━━━━━━━━━━  EMBED 2: Senior Enlisted  ━━━━━━━━━━━━━━━━━━━
+    embed2 = discord.Embed(color=0x2D572C)
 
-    if fh_enlisted:
-        lines = [_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"], with_link=True) for m in fh_enlisted]
-        value = "\n".join(lines)
+    if fh_senior:
+        lines = [_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"], with_link=True) for m in fh_senior]
+        value = "*Experienced operators forming the backbone of the fighting force.*\n\n" + "\n".join(lines)
         if len(value) > 1024:
             value = value[:1000] + "\n*… list truncated*"
     else:
-        value = "*No enlisted members*"
+        value = "*No senior enlisted members*"
     embed2.add_field(
-        name="🎖️  Enlisted",
+        name="🎖️  Senior Enlisted",
         value=value,
         inline=False,
     )
 
-    # ━━━━━━━━━━━━━━━━━━━━━  EMBED 3: AAC + Reserves  ━━━━━━━━━━━━━━━━━━━━━━━━
-    embed3 = discord.Embed(
-        color=0x2D572C,
-    )
+    # ━━━━━━━━━━━━━━━  EMBED 3: Enlisted  ━━━━━━━━━━━━━━━━━━━━━━━━
+    embed3 = discord.Embed(color=0x2D572C)
 
-    # ── AAC section ──
-    aac_header = (
-        "*Support assets — rotary wing, fixed wing & drone operators, "
-        "and Forward Air Controllers (FACs).*\n\n"
-    )
-    if aac:
-        lines = [_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"], with_link=True) for m in aac]
-        value = aac_header + "\n".join(lines)
+    if fh_enlisted:
+        lines = [_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"], with_link=True) for m in fh_enlisted]
+        value = "*The newer members of the platoon, building their skills on the frontline.*\n\n" + "\n".join(lines)
         if len(value) > 1024:
             value = value[:1000] + "\n*… list truncated*"
     else:
-        value = aac_header + "*No active members*"
+        value = "*No enlisted members*"
     embed3.add_field(
+        name="🪖  Enlisted",
+        value=value,
+        inline=False,
+    )
+
+    # ━━━━━━━━━━━━━━━  EMBED 4: AAC + Reserves  ━━━━━━━━━━━━━━━━━━━
+    embed4 = discord.Embed(color=0x2D572C)
+
+    # ── AAC section ──
+    if aac:
+        lines = [_format_member_line(m["rank_prefix"], m["nickname"], m["on_loa"], with_link=True) for m in aac]
+        value = (
+            "*Support assets — rotary wing, fixed wing & drone operators, "
+            "and Forward Air Controllers (FACs).*\n\n"
+            + "\n".join(lines)
+        )
+        if len(value) > 1024:
+            value = value[:1000] + "\n*… list truncated*"
+    else:
+        value = (
+            "*Support assets — rotary wing, fixed wing & drone operators, "
+            "and Forward Air Controllers (FACs).*\n\n"
+            "*No active members*"
+        )
+    embed4.add_field(
         name="<:AAC:1477458645481554042>  Army Aircorps (AAC)",
         value=value,
         inline=False,
     )
 
     # ── Spacer ──
-    embed3.add_field(name="", value="", inline=False)
+    embed4.add_field(name="", value="", inline=False)
 
     # ── Reserves section (no links) ──
     RESERVE_DISPLAY_LIMIT = 20
@@ -349,15 +370,15 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
             body += f"\n\n*… and {remaining} more reserves*"
     else:
         body = "*No reserve members*"
-    embed3.add_field(
+    embed4.add_field(
         name=f"🔸  Reserves ({reserve_count})",
         value=body,
         inline=False,
     )
 
-    embed3.set_footer(text=f"GOL Platoon Roster  •  Updated {now_uk.strftime('%d-%m-%Y %H:%M')} UK")
+    embed4.set_footer(text=f"GOL Platoon Roster  •  Updated {now_uk.strftime('%d-%m-%Y %H:%M')} UK")
 
-    return [embed1, embed2, embed3]
+    return [embed1, embed2, embed3, embed4]
 
 
 # ── Summary Message Update ─────────────────────────────────────────────
