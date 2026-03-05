@@ -191,7 +191,7 @@ class MissionPollCommands(commands.Cog):
     @app_commands.describe(
         framework="Select the framework version to filter missions",
         event="Select the upcoming event to create a poll for",
-        duration="Poll duration in hours (default: 24, min: 12, max: 72)",
+        duration="Poll duration in hours (default: 36, min: 12, max: 72)",
         options="Number of missions in the poll (default: 5, min: 3, max: 10)",
         composition="Filter by composition type (default: All)",
     )
@@ -200,7 +200,7 @@ class MissionPollCommands(commands.Cog):
         interaction: discord.Interaction,
         framework: str,
         event: str,
-        duration: int = 24,
+        duration: int = 36,
         options: app_commands.Range[int, 3, 10] = 5,
         composition: str = "All",
     ):
@@ -291,7 +291,7 @@ class MissionPollCommands(commands.Cog):
 
         if dedup_removed:
             logger.info(
-                f"Deduplication removed {len(dedup_removed)} missions (scheduled in past 2 weeks): "
+                f"Deduplication removed {len(dedup_removed)} missions (scheduled in past 8 weeks): "
                 f"{[t.name for t in dedup_removed]}"
             )
 
@@ -554,8 +554,8 @@ class MissionPollCommands(commands.Cog):
     ) -> list[app_commands.Choice[int]]:
         presets = [
             app_commands.Choice(name="12 hours", value=12),
-            app_commands.Choice(name="24 hours (default)", value=24),
-            app_commands.Choice(name="36 hours", value=36),
+            app_commands.Choice(name="24 hours", value=24),
+            app_commands.Choice(name="36 hours (default)", value=36),
             app_commands.Choice(name="48 hours", value=48),
             app_commands.Choice(name="60 hours", value=60),
             app_commands.Choice(name="72 hours", value=72),
