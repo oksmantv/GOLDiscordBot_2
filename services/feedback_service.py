@@ -175,8 +175,19 @@ async def create_feedback_thread(
         guild.id, event_date, event_date
     )
 
+    # Skip if all events for this date are cancelled
+    non_cancelled = [
+        ev for ev in events
+        if ev.name.strip().upper() != "EVENT CANCELLED"
+    ]
+    if not non_cancelled:
+        logger.info(
+            f"All events cancelled for {event_date}, skipping feedback thread"
+        )
+        return None
+
     # Build thread title and template
-    title = build_thread_title(event_date, events)
+    title = build_thread_title(event_date, non_cancelled)
     template = get_feedback_template(event_date)
 
     # Build mentions (Raid-Helper or fallback)

@@ -310,9 +310,9 @@ class MissionPollCommands(commands.Cog):
                     f"**Forum Channel:** #{guild.get_channel(briefing_channel_id).name if guild.get_channel(briefing_channel_id) else 'Unknown'}\n"
                     f"**Total threads scanned:** {len(all_threads)}\n"
                     f"**After framework+composition filter:** {len(filtered)}\n"
-                    f"**Removed by deduplication (scheduled in past 2 weeks):** {len(dedup_removed)}\n\n"
+                    f"**Removed by deduplication (scheduled in past 8 weeks):** {len(dedup_removed)}\n\n"
                     "💡 Try a different framework version, composition, or wait for the deduplication "
-                    "window (2 weeks from event date) to expire."
+                    "window (8 weeks from event date) to expire."
                 ),
             )
             await send_dm_safe(interaction.user, embed=error_embed, fallback_channel=log_channel)
@@ -372,7 +372,7 @@ class MissionPollCommands(commands.Cog):
                 color=discord.Color.greyple(),
                 description=(
                     f"The following missions were excluded because they were "
-                    f"scheduled for an event within the past 2 weeks:\n\n{dedup_names}"
+                    f"scheduled for an event within the past 8 weeks:\n\n{dedup_names}"
                 ),
             )
             await send_dm_safe(interaction.user, embed=dedup_embed, fallback_channel=log_channel)

@@ -43,6 +43,16 @@ class LOARepository:
         rows = await db_connection.execute_query(query, guild_id)
         return [dict(r) for r in rows]
 
+    async def get_currently_active_loas_by_guild(self, guild_id: int) -> list[dict]:
+        """Get LOAs that are currently in effect (start_date <= today, not expired)."""
+        query = """
+        SELECT * FROM leave_of_absence
+        WHERE guild_id = $1 AND expired = FALSE AND start_date <= CURRENT_DATE
+        ORDER BY end_date ASC;
+        """
+        rows = await db_connection.execute_query(query, guild_id)
+        return [dict(r) for r in rows]
+
     async def get_loa_by_id(self, loa_id: int) -> Optional[dict]:
         """Get a specific LOA by ID."""
         query = "SELECT * FROM leave_of_absence WHERE id = $1;"

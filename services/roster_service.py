@@ -137,8 +137,8 @@ async def scan_roster(guild: discord.Guild) -> dict:
         logger.warning("@Member role not found in guild")
         return {"total": 0, "active": 0, "reserve": 0, "updated": 0, "removed": 0}
 
-    # Fetch active LOA user IDs for this guild
-    active_loas = await loa_repository.get_active_loas_by_guild(guild.id)
+    # Fetch currently-active LOA user IDs (excludes future LOAs)
+    active_loas = await loa_repository.get_currently_active_loas_by_guild(guild.id)
     loa_user_ids = {loa["user_id"] for loa in active_loas}
 
     present_user_ids: list[int] = []
