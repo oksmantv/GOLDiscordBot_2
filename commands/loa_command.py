@@ -382,8 +382,8 @@ class LOACommands(commands.Cog):
             if selected_user is None:
                 return []
 
-            # selected_user may be a Member, int, or string snowflake
-            if isinstance(selected_user, discord.Member):
+            # selected_user may be a Member, Object, int, or string snowflake
+            if hasattr(selected_user, "id"):
                 target_user_id = selected_user.id
             elif isinstance(selected_user, int):
                 target_user_id = selected_user
