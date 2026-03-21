@@ -255,23 +255,32 @@ class LOACommands(commands.Cog):
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[int]]:
-        active_loas = await loa_repository.get_active_loas_by_user(
-            interaction.guild_id, interaction.user.id
-        )
+        try:
+            logger.info(
+                f"[cancelloa autocomplete] guild={interaction.guild_id} "
+                f"user={interaction.user.id}"
+            )
+            active_loas = await loa_repository.get_active_loas_by_user(
+                interaction.guild_id, interaction.user.id
+            )
+            logger.info(f"[cancelloa autocomplete] found {len(active_loas)} active LOAs")
 
-        choices: list[app_commands.Choice[int]] = []
-        for entry in active_loas:
-            start_str = entry["start_date"].strftime("%d-%m-%Y")
-            end_str = entry["end_date"].strftime("%d-%m-%Y")
-            label = f"{start_str} → {end_str}"
-            if entry.get("reason"):
-                label += f": {entry['reason']}"
-            label = label[:100]  # Discord max 100 chars
+            choices: list[app_commands.Choice[int]] = []
+            for entry in active_loas:
+                start_str = entry["start_date"].strftime("%d-%m-%Y")
+                end_str = entry["end_date"].strftime("%d-%m-%Y")
+                label = f"{start_str} → {end_str}"
+                if entry.get("reason"):
+                    label += f": {entry['reason']}"
+                label = label[:100]  # Discord max 100 chars
 
-            if not current or current.lower() in label.lower():
-                choices.append(app_commands.Choice(name=label, value=entry["id"]))
+                if not current or current.lower() in label.lower():
+                    choices.append(app_commands.Choice(name=label, value=entry["id"]))
 
-        return choices[:25]  # Discord max 25 choices
+            return choices[:25]  # Discord max 25 choices
+        except Exception as e:
+            logger.error(f"[cancelloa autocomplete] error: {e}", exc_info=True)
+            return []
 
     # ─── /admincancelloa ───────────────────────────────────────────────
 
@@ -360,38 +369,56 @@ class LOACommands(commands.Cog):
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[int]]:
-        # Get the user from the namespace (filled in before loa field)
-        namespace = interaction.namespace
-        selected_user = getattr(namespace, "user", None)
+        try:
+            # Get the user from the namespace (filled in before loa field)
+            namespace = interaction.namespace
+            selected_user = getattr(namespace, "user", None)
+            logger.info(
+                f"[admincancelloa autocomplete] guild={interaction.guild_id} "
+                f"invoker={interaction.user.id} selected_user={selected_user!r} "
+                f"type={type(selected_user).__name__}"
+            )
 
-        if selected_user is None:
+            if selected_user is None:
+                return []
+
+            # selected_user may be a Member, int, or string snowflake
+            if isinstance(selected_user, discord.Member):
+                target_user_id = selected_user.id
+            elif isinstance(selected_user, int):
+                target_user_id = selected_user
+            elif isinstance(selected_user, str):
+                try:
+                    target_user_id = int(selected_user)
+                except ValueError:
+                    logger.warning(f"[admincancelloa autocomplete] could not parse user string: {selected_user!r}")
+                    return []
+            else:
+                logger.warning(f"[admincancelloa autocomplete] unexpected user type: {type(selected_user)}")
+                return []
+
+            logger.info(f"[admincancelloa autocomplete] querying LOAs for user_id={target_user_id}")
+            active_loas = await loa_repository.get_active_loas_by_user(
+                interaction.guild_id, target_user_id
+            )
+            logger.info(f"[admincancelloa autocomplete] found {len(active_loas)} active LOAs")
+
+            choices: list[app_commands.Choice[int]] = []
+            for entry in active_loas:
+                start_str = entry["start_date"].strftime("%d-%m-%Y")
+                end_str = entry["end_date"].strftime("%d-%m-%Y")
+                label = f"{start_str} → {end_str}"
+                if entry.get("reason"):
+                    label += f": {entry['reason']}"
+                label = label[:100]  # Discord max 100 chars
+
+                if not current or current.lower() in label.lower():
+                    choices.append(app_commands.Choice(name=label, value=entry["id"]))
+
+            return choices[:25]  # Discord max 25 choices
+        except Exception as e:
+            logger.error(f"[admincancelloa autocomplete] error: {e}", exc_info=True)
             return []
-
-        # selected_user may be a Member object or a raw ID (snowflake)
-        if isinstance(selected_user, discord.Member):
-            target_user_id = selected_user.id
-        elif isinstance(selected_user, int):
-            target_user_id = selected_user
-        else:
-            return []
-
-        active_loas = await loa_repository.get_active_loas_by_user(
-            interaction.guild_id, target_user_id
-        )
-
-        choices: list[app_commands.Choice[int]] = []
-        for entry in active_loas:
-            start_str = entry["start_date"].strftime("%d-%m-%Y")
-            end_str = entry["end_date"].strftime("%d-%m-%Y")
-            label = f"{start_str} → {end_str}"
-            if entry.get("reason"):
-                label += f": {entry['reason']}"
-            label = label[:100]  # Discord max 100 chars
-
-            if not current or current.lower() in label.lower():
-                choices.append(app_commands.Choice(name=label, value=entry["id"]))
-
-        return choices[:25]  # Discord max 25 choices
 
     # ─── /configureloa ─────────────────────────────────────────────────
 
