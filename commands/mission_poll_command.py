@@ -194,6 +194,7 @@ class MissionPollCommands(commands.Cog):
         duration="Poll duration in hours (default: 36, min: 12, max: 72)",
         options="Number of missions in the poll (default: 5, min: 3, max: 10)",
         composition="Filter by composition type (default: All)",
+        exclusion_weeks="How many weeks back to check for recently played missions (default: 8)",
     )
     async def missionpoll_command(
         self,
@@ -203,6 +204,7 @@ class MissionPollCommands(commands.Cog):
         duration: int = 36,
         options: app_commands.Range[int, 3, 10] = 5,
         composition: str = "All",
+        exclusion_weeks: int = 8,
     ):
         """Handle the /missionpoll command."""
         # ── Permission check (admin or @Editor) ──
@@ -225,6 +227,13 @@ class MissionPollCommands(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
+
+        # ── Validate exclusion_weeks ──
+        if exclusion_weeks not in (2, 4, 6, 8):
+            await interaction.followup.send(
+                "❌ Exclusion weeks must be one of: 2, 4, 6, 8.", ephemeral=True
+            )
+            return
 
         # ── Validate duration ──
         if duration not in (12, 24, 36, 48, 60, 72):
@@ -280,7 +289,7 @@ class MissionPollCommands(commands.Cog):
         filtered = filter_threads_by_tags(all_threads, framework, composition)
 
         # ── Deduplication: exclude recently scheduled missions ──
-        excluded_ids, matched_names = await get_excluded_thread_ids(guild.id, filtered)
+        excluded_ids, matched_names = await get_excluded_thread_ids(guild.id, filtered, weeks=exclusion_weeks)
         dedup_removed = []
         remaining = []
         for t in filtered:
@@ -291,7 +300,7 @@ class MissionPollCommands(commands.Cog):
 
         if dedup_removed:
             logger.info(
-                f"Deduplication removed {len(dedup_removed)} missions (scheduled in past 8 weeks): "
+                f"Deduplication removed {len(dedup_removed)} missions (scheduled in past {exclusion_weeks} weeks): "
                 f"{[t.name for t in dedup_removed]}"
             )
 
@@ -310,9 +319,9 @@ class MissionPollCommands(commands.Cog):
                     f"**Forum Channel:** #{guild.get_channel(briefing_channel_id).name if guild.get_channel(briefing_channel_id) else 'Unknown'}\n"
                     f"**Total threads scanned:** {len(all_threads)}\n"
                     f"**After framework+composition filter:** {len(filtered)}\n"
-                    f"**Removed by deduplication (scheduled in past 8 weeks):** {len(dedup_removed)}\n\n"
-                    "💡 Try a different framework version, composition, or wait for the deduplication "
-                    "window (8 weeks from event date) to expire."
+                    f"**Removed by deduplication (scheduled in past {exclusion_weeks} weeks):** {len(dedup_removed)}\n\n"
+                    f"💡 Try a different framework version, composition, reduce the exclusion window "
+                    f"(currently {exclusion_weeks} weeks), or wait for the deduplication window to expire."
                 ),
             )
             await send_dm_safe(interaction.user, embed=error_embed, fallback_channel=log_channel)
@@ -372,7 +381,7 @@ class MissionPollCommands(commands.Cog):
                 color=discord.Color.greyple(),
                 description=(
                     f"The following missions were excluded because they were "
-                    f"scheduled for an event within the past 8 weeks:\n\n{dedup_names}"
+                    f"scheduled for an event within the past {exclusion_weeks} weeks:\n\n{dedup_names}"
                 ),
             )
             await send_dm_safe(interaction.user, embed=dedup_embed, fallback_channel=log_channel)
@@ -559,6 +568,21 @@ class MissionPollCommands(commands.Cog):
             app_commands.Choice(name="48 hours", value=48),
             app_commands.Choice(name="60 hours", value=60),
             app_commands.Choice(name="72 hours", value=72),
+        ]
+        if current:
+            return [c for c in presets if current in str(c.value) or current.lower() in c.name.lower()]
+        return presets
+
+    # ─── Autocomplete: exclusion_weeks ─────────────────────────────────
+    @missionpoll_command.autocomplete("exclusion_weeks")
+    async def exclusion_weeks_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[int]]:
+        presets = [
+            app_commands.Choice(name="2 weeks — minimal exclusion", value=2),
+            app_commands.Choice(name="4 weeks — short window", value=4),
+            app_commands.Choice(name="6 weeks — medium window", value=6),
+            app_commands.Choice(name="8 weeks — full exclusion (default)", value=8),
         ]
         if current:
             return [c for c in presets if current in str(c.value) or current.lower() in c.name.lower()]

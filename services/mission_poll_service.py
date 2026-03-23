@@ -183,21 +183,21 @@ def filter_threads_by_tags(
     return filtered
 
 
-async def get_excluded_thread_ids(guild_id: int, threads: list[discord.Thread]) -> tuple[set[int], list[str]]:
-    """Get thread IDs whose mission name matches an event scheduled in the past 8 weeks.
+async def get_excluded_thread_ids(guild_id: int, threads: list[discord.Thread], weeks: int = 8) -> tuple[set[int], list[str]]:
+    """Get thread IDs whose mission name matches an event scheduled in the past *weeks* weeks.
 
     Uses the events table as the master source of truth.
-    Any event with a non-empty name in the past 8 weeks means that mission
+    Any event with a non-empty name in the lookback window means that mission
     was played/scheduled and should not appear in a new poll.
 
     Returns:
         A tuple of (excluded_thread_ids, matched_event_names) for logging.
     """
     today = date.today()
-    start_date = today - timedelta(weeks=8)
+    start_date = today - timedelta(weeks=weeks)
     events = await event_repository.get_events_by_guild_and_date_range(guild_id, start_date, today)
 
-    # Collect non-empty event names from the past 8 weeks
+    # Collect non-empty event names from the lookback window
     recent_names = set()
     for ev in events:
         if ev.name and ev.name.strip():
