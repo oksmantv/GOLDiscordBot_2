@@ -588,8 +588,8 @@ class MissionPollCommands(commands.Cog):
             return [c for c in presets if current in str(c.value) or current.lower() in c.name.lower()]
         return presets
 
-    # ─── Background task: poll monitor (every 30 minutes) ──────────────
-    @tasks.loop(minutes=30)
+    # ─── Background task: poll monitor (every 1 minute) ──────────────
+    @tasks.loop(minutes=1)
     async def _poll_monitor_loop(self):
         """Check for ended polls and process results."""
         try:
