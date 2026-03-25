@@ -77,29 +77,48 @@ def build_loa_summary_embed(
         "• Your **@Active** role is automatically restored\n"
     )
 
-    # ── Active LOAs list ──
+    # ── Partition into active (started) vs planned (future) ──
+    today = date.today()
+    currently_active = [loa for loa in active_loas if loa["start_date"] <= today]
+    planned = sorted(
+        [loa for loa in active_loas if loa["start_date"] > today],
+        key=lambda l: l["start_date"],
+    )
+
     guide += "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 
-    if active_loas:
-        guide += f"**🏖️ Active Leaves ({len(active_loas)})**\n\n"
+    CHAR_LIMIT = 3800  # leave headroom for the 4096 Discord limit
 
-        for loa in active_loas:
+    def _render_entries(entries: list[dict], buf: str, limit: int) -> str:
+        rendered = 0
+        for loa in entries:
             user_mention = f"<@{loa['user_id']}>"
             start_str = loa["start_date"].strftime("%d-%m-%Y")
             end_str = loa["end_date"].strftime("%d-%m-%Y")
-
             entry = f"👤 {user_mention}\n📅 `{start_str}` → `{end_str}`"
             if loa.get("reason"):
                 entry += f"\n💬 {loa['reason']}"
-            guide += entry + "\n\n"
+            entry += "\n\n"
 
-            # Safety check — Discord embed description limit is 4096 chars
-            if len(guide) > 3800:
-                remaining = len(active_loas) - active_loas.index(loa) - 1
-                if remaining > 0:
-                    guide += f"*... and {remaining} more*\n"
+            if len(buf) + len(entry) > limit:
+                hidden = len(entries) - rendered
+                buf += f"*{hidden} more leave(s) hidden*\n"
                 break
-    else:
+            buf += entry
+            rendered += 1
+        return buf
+
+    if currently_active:
+        guide += f"**🏖️ Active Leaves ({len(currently_active)})**\n\n"
+        guide = _render_entries(currently_active, guide, CHAR_LIMIT)
+
+    if planned:
+        if currently_active:
+            guide += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        guide += f"**📅 Planned Leaves ({len(planned)})**\n\n"
+        guide = _render_entries(planned, guide, CHAR_LIMIT)
+
+    if not currently_active and not planned:
         guide += "*No active leaves of absence. All personnel are on duty! 🫡*\n"
 
     embed.description = guide
