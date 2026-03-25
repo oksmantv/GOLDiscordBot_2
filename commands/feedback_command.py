@@ -359,9 +359,32 @@ class FeedbackCommands(commands.Cog):
                     ephemeral=True,
                 )
                 return
+
+            # Build cancellation description, preserving Training info on Thursdays
+            cancelled_mission = ":no_entry: **EVENT CANCELLED**"
+            if target_date.weekday() == 3:  # Thursday — keep Training section
+                training_name = ""
+                instructor_name = ""
+                from services.event_repository import event_repository as ev_repo
+                training_event = await ev_repo.get_event_by_guild_date_type(
+                    guild.id, target_date, "Training"
+                )
+                if training_event:
+                    training_name = training_event.name or ""
+                    instructor_name = training_event.creator_name or ""
+
+                description = raid_helper_service.build_event_description(
+                    cancelled_mission,
+                    is_thursday=True,
+                    training_name=training_name,
+                    instructor_name=instructor_name,
+                )
+            else:
+                description = cancelled_mission
+
             success = await raid_helper_service.update_event(
                 event_id,
-                description="## :no_entry: EVENT CANCELLED\nThis event has been cancelled.",
+                description=description,
             )
             if success:
                 await interaction.followup.send(
