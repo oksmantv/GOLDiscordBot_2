@@ -361,7 +361,7 @@ class FeedbackCommands(commands.Cog):
                 return
 
             # Build cancellation description, preserving Training info on Thursdays
-            cancelled_mission = ":no_entry: **EVENT CANCELLED**"
+            cancelled_mission = ":no_entry: **Cancelled**"
             if target_date.weekday() == 3:  # Thursday — keep Training section
                 training_name = ""
                 instructor_name = ""
