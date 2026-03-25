@@ -350,6 +350,32 @@ class FeedbackCommands(commands.Cog):
             )
             return
 
+        # ── Handle cancelled events ──
+        if mission_event.name.strip().upper() == "EVENT CANCELLED":
+            event_id = await raid_helper_service.find_event_id_by_date(guild.id, target_date)
+            if not event_id:
+                await interaction.followup.send(
+                    f"❌ No Raid-Helper event found for {target_date.strftime('%A %d-%m-%Y')}.",
+                    ephemeral=True,
+                )
+                return
+            success = await raid_helper_service.update_event(
+                event_id,
+                description="## :no_entry: EVENT CANCELLED\nThis event has been cancelled.",
+            )
+            if success:
+                await interaction.followup.send(
+                    f"✅ Raid-Helper event for **{target_date.strftime('%A %d-%m-%Y')}** "
+                    f"updated to **EVENT CANCELLED**.",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(
+                    f"❌ Failed to update Raid-Helper event for {target_date.strftime('%A %d-%m-%Y')}.",
+                    ephemeral=True,
+                )
+            return
+
         # Find matching briefing thread by name
         import asyncio
 
