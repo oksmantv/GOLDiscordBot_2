@@ -361,7 +361,7 @@ class FeedbackCommands(commands.Cog):
                 return
 
             # Build cancellation description, preserving Training info on Thursdays
-            cancelled_mission = ":no_entry: **Cancelled**"
+            cancelled_text = ":no_entry: **Cancelled**"
             if target_date.weekday() == 3:  # Thursday — keep Training section
                 training_name = ""
                 instructor_name = ""
@@ -370,21 +370,38 @@ class FeedbackCommands(commands.Cog):
                     guild.id, target_date, "Training"
                 )
                 if training_event:
-                    training_name = training_event.name or ""
-                    instructor_name = training_event.creator_name or ""
+                    training_cancelled = (training_event.name or "").strip().upper() == "EVENT CANCELLED"
+                    if training_cancelled:
+                        training_name = ""
+                        instructor_name = ""
+                    else:
+                        training_name = training_event.name or ""
+                        instructor_name = training_event.creator_name or ""
 
-                description = raid_helper_service.build_event_description(
-                    cancelled_mission,
-                    is_thursday=True,
-                    training_name=training_name,
-                    instructor_name=instructor_name,
-                )
+                # If training is also cancelled, build manually to show cancelled for both
+                if not training_name and not instructor_name:
+                    description = (
+                        f"## Training <:Training:1173686838926512199>\n{cancelled_text}\n"
+                        f"## Mission <:Mission:1173686836451885076>\n{cancelled_text}"
+                    )
+                else:
+                    description = raid_helper_service.build_event_description(
+                        cancelled_text,
+                        is_thursday=True,
+                        training_name=training_name,
+                        instructor_name=instructor_name,
+                    )
             else:
-                description = cancelled_mission
+                description = cancelled_text
 
+            cancelled_image = (
+                "https://cdn.discordapp.com/attachments/862603286091923466/"
+                "1479159129997049856/event-cancelled-rubber-stamp-seal-vector_140916-29949.png"
+            )
             success = await raid_helper_service.update_event(
                 event_id,
                 description=description,
+                image=cancelled_image,
             )
             if success:
                 await interaction.followup.send(
