@@ -209,10 +209,11 @@ class RaidHelperService:
         *,
         description: str | None = None,
         image: str | None = None,
+        attendance: str | None = None,
     ) -> bool:
         """Update a Raid-Helper event via PATCH /api/v2/events/{eventId}.
 
-        Supported fields: description, image (URL).
+        Supported fields: description, image (URL), attendance (advancedSettings).
         Returns True on success, False on failure.
         """
         url = f"{RAID_HELPER_API_V2}/events/{event_message_id}"
@@ -226,6 +227,8 @@ class RaidHelperService:
             payload["description"] = description
         if image is not None:
             payload.setdefault("advancedSettings", {})["image"] = image
+        if attendance is not None:
+            payload.setdefault("advancedSettings", {})["attendance"] = attendance
 
         if not payload:
             logger.info("update_event called with nothing to update")

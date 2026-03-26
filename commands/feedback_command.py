@@ -402,6 +402,7 @@ class FeedbackCommands(commands.Cog):
                 event_id,
                 description=description,
                 image=cancelled_image,
+                attendance="none",
             )
             if success:
                 await interaction.followup.send(
