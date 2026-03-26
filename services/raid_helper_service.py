@@ -225,10 +225,21 @@ class RaidHelperService:
         payload: dict = {}
         if description is not None:
             payload["description"] = description
-        if image is not None:
-            payload.setdefault("advancedSettings", {})["image"] = image
+
+        # Build advancedSettings — Raid-Helper expects a single string with
+        # newline-separated "key: value" entries for most settings, but
+        # "image" is a known object key.
+        adv_parts: list[str] = []
         if attendance is not None:
-            payload.setdefault("advancedSettings", {})["attendance"] = attendance
+            adv_parts.append(f"attendance: {attendance}")
+        if image is not None:
+            adv_parts.append(f"image: {image}")
+
+        if adv_parts:
+            payload["advancedSettings"] = "\n".join(adv_parts)
+
+        # Log the full payload for debugging
+        logger.info(f"Raid-Helper PATCH payload for event {event_message_id}: {payload}")
 
         if not payload:
             logger.info("update_event called with nothing to update")
