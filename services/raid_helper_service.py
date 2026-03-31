@@ -226,7 +226,7 @@ class RaidHelperService:
         image: str | None = None,
         attendance: str | None = None,
     ) -> bool:
-        """Update a Raid-Helper event via PATCH /api/v2/events/{eventId}.
+        """Update a Raid-Helper event via PATCH /api/v4/events/{eventId}.
 
         Supported fields: description, image (URL), attendance (advancedSettings).
         Returns True on success, False on failure.
@@ -241,14 +241,14 @@ class RaidHelperService:
         if description is not None:
             payload["description"] = description
 
-        # Build advancedSettings — Raid-Helper expects a single string with
-        # newline-separated "key: value" entries for most settings, but
-        # "image" is a known object key.
+        # Send image as a top-level field
+        if image is not None:
+            payload["image"] = image
+
+        # Build advancedSettings for other settings
         adv_parts: list[str] = []
         if attendance is not None:
             adv_parts.append(f"attendance: {attendance}")
-        if image is not None:
-            adv_parts.append(f"image: {image}")
 
         if adv_parts:
             payload["advancedSettings"] = "\n".join(adv_parts)
@@ -268,10 +268,11 @@ class RaidHelperService:
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
+                    body = await resp.text()
                     if resp.status in (200, 204):
                         logger.info(
                             f"Updated Raid-Helper event {event_message_id}: "
-                            f"fields={list(payload.keys())}"
+                            f"fields={list(payload.keys())}, response={body[:300]}"
                         )
                         return True
                     else:
