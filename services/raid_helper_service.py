@@ -10,19 +10,20 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-RAID_HELPER_API_V2 = "https://raid-helper.dev/api/v2"
-RAID_HELPER_API_V3 = "https://raid-helper.dev/api/v3"
+RAID_HELPER_API = "https://raid-helper.xyz/api/v4"
 
 UK_TZ = ZoneInfo("Europe/London")
 
 
 class RaidHelperService:
-    """HTTP client for the Raid-Helper API.
+    """HTTP client for the Raid-Helper API (v4, raid-helper.xyz).
 
-    - GET /api/v3/servers/{serverId}/events  (requires server API token)
+    - GET /api/v4/servers/{serverId}/events  (requires server API token)
       Lists all events on the server with basic data including startTime.
-    - GET /api/v2/events/{eventId}           (public, no auth)
+    - GET /api/v4/events/{eventId}           (public, no auth)
       Fetches full event data including all sign-ups.
+    - PATCH /api/v4/events/{eventId}         (requires server API token)
+      Update an event.
 
     The event ID in Raid-Helper is the Discord message ID of the event post.
     """
@@ -43,7 +44,7 @@ class RaidHelperService:
         Returns a list of event dicts with at least:
           id, channelId, startTime, title, ...
         """
-        url = f"{RAID_HELPER_API_V2}/servers/{server_id}/events"
+        url = f"{RAID_HELPER_API}/servers/{server_id}/events"
         headers = self._auth_headers
         if not headers:
             logger.warning("No RAID_HELPER_API_TOKEN configured — cannot list server events")
@@ -135,7 +136,7 @@ class RaidHelperService:
 
         Returns the parsed JSON dict or None on failure.
         """
-        url = f"{RAID_HELPER_API_V2}/events/{event_message_id}"
+        url = f"{RAID_HELPER_API}/events/{event_message_id}"
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
@@ -230,7 +231,7 @@ class RaidHelperService:
         Supported fields: description, image (URL), attendance (advancedSettings).
         Returns True on success, False on failure.
         """
-        url = f"{RAID_HELPER_API_V2}/events/{event_message_id}"
+        url = f"{RAID_HELPER_API}/events/{event_message_id}"
         headers = self._auth_headers
         if not headers:
             logger.warning("No RAID_HELPER_API_TOKEN configured — cannot update event")
