@@ -92,30 +92,19 @@ class RaidHelperService:
         """
         events = await self.get_server_events(server_id)
         if not events:
-            logger.warning(f"Raid-Helper returned no events for server {server_id}")
             return None
 
-        logger.info(
-            f"Searching {len(events)} Raid-Helper events for date {event_date}"
-        )
         for ev in events:
             start_time = ev.get("startTime")
             if not start_time:
-                logger.debug(f"Event {ev.get('id', '?')} has no startTime, keys: {list(ev.keys())}")
                 continue
 
             try:
                 # startTime is a Unix timestamp (seconds)
                 ev_dt = datetime.fromtimestamp(int(start_time), tz=timezone.utc)
                 ev_date_uk = ev_dt.astimezone(UK_TZ).date()
-            except (ValueError, TypeError, OSError) as exc:
-                logger.debug(f"Event {ev.get('id', '?')} startTime parse error: {exc}")
+            except (ValueError, TypeError, OSError):
                 continue
-
-            logger.debug(
-                f"Event {ev.get('id', '?')} '{ev.get('title', '?')}': "
-                f"startTime={start_time} -> UK date={ev_date_uk} (looking for {event_date})"
-            )
 
             if ev_date_uk == event_date:
                 event_id = ev.get("id")
@@ -126,7 +115,7 @@ class RaidHelperService:
                     )
                     return int(event_id)
 
-        logger.warning(f"No Raid-Helper event matched date {event_date} out of {len(events)} events")
+        logger.warning(f"No Raid-Helper event found for date {event_date}")
         return None
 
     # ── Single event detail (v2, public, no auth) ─────────────────────
@@ -241,16 +230,6 @@ class RaidHelperService:
         if description is not None:
             payload["description"] = description
 
-        # DEBUG: Fetch current event to inspect advancedSettings keys and image handling
-        current = await self.get_event(event_message_id)
-        if current:
-            adv = current.get("advancedSettings", {})
-            if isinstance(adv, dict):
-                logger.info(f"DEBUG advancedSettings keys: {list(adv.keys())}")
-                for k in adv:
-                    if "image" in k.lower() or "img" in k.lower():
-                        logger.info(f"DEBUG advancedSettings['{k}']: {adv[k]}")
-
         # advancedSettings is a dict in v4 — send image and attendance inside it
         adv_settings: dict = {}
         if image is not None:
@@ -260,9 +239,6 @@ class RaidHelperService:
 
         if adv_settings:
             payload["advancedSettings"] = adv_settings
-
-        # Log the full payload for debugging
-        logger.info(f"Raid-Helper PATCH payload for event {event_message_id}: {payload}")
 
         if not payload:
             logger.info("update_event called with nothing to update")
@@ -276,11 +252,10 @@ class RaidHelperService:
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
-                    body = await resp.text()
                     if resp.status in (200, 204):
                         logger.info(
                             f"Updated Raid-Helper event {event_message_id}: "
-                            f"fields={list(payload.keys())}, response={body[:300]}"
+                            f"fields={list(payload.keys())}"
                         )
                         return True
                     else:

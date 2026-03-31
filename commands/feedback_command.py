@@ -250,12 +250,12 @@ class FeedbackCommands(commands.Cog):
         description="Update a Raid-Helper event with content from its briefing post",
     )
     @app_commands.describe(
-        event_date="The event date (DD-MM-YYYY). Defaults to the next upcoming event day.",
+        event_date="The event date (DD-MM-YYYY).",
     )
     async def updateevent_command(
         self,
         interaction: discord.Interaction,
-        event_date: str = None,
+        event_date: str,
     ):
         """Manually update a Raid-Helper event's description and image from the briefing post."""
         guild = interaction.guild
@@ -285,23 +285,15 @@ class FeedbackCommands(commands.Cog):
 
         # Parse date
         target_date: date
-        if event_date:
-            try:
-                parts = event_date.strip().split("-")
-                target_date = date(int(parts[2]), int(parts[1]), int(parts[0]))
-            except (ValueError, IndexError):
-                await interaction.followup.send(
-                    "❌ Invalid date format. Use `DD-MM-YYYY` (e.g. `06-03-2026`).",
-                    ephemeral=True,
-                )
-                return
-        else:
-            # Default to next upcoming event day (Thu or Sun)
-            target_date = date.today()
-            for _ in range(7):
-                if is_event_day(target_date):
-                    break
-                target_date += timedelta(days=1)
+        try:
+            parts = event_date.strip().split("-")
+            target_date = date(int(parts[2]), int(parts[1]), int(parts[0]))
+        except (ValueError, IndexError):
+            await interaction.followup.send(
+                "❌ Invalid date format. Use `DD-MM-YYYY` (e.g. `06-03-2026`).",
+                ephemeral=True,
+            )
+            return
 
         if not is_event_day(target_date):
             await interaction.followup.send(
