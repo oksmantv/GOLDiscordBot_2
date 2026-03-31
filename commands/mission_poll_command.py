@@ -7,6 +7,7 @@ import random
 import re
 import time
 import logging
+import zoneinfo
 
 from config import Config
 from services.forum_tag_service import forum_tag_service
@@ -32,6 +33,18 @@ from services.raid_helper_service import raid_helper_service
 
 logger = logging.getLogger(__name__)
 
+# ─── Timezone for auto-poll scheduling ─────────────────────────────
+_SWEDISH_TZ = zoneinfo.ZoneInfo("Europe/Stockholm")
+
+# ─── Auto-poll default settings ───────────────────────────────────
+_AUTO_POLL_FRAMEWORK = "Framework 3.0"
+_AUTO_POLL_DURATION_HOURS = 36
+_AUTO_POLL_OPTIONS = 5
+_AUTO_POLL_COMPOSITION = "All"
+_AUTO_POLL_EXCLUSION_WEEKS = 8
+_AUTO_POLL_HOUR = 21
+_AUTO_POLL_MINUTE = 30
+
 
 # ─── Autocomplete cache settings ──────────────────────────────────
 _AUTOCOMPLETE_COOLDOWN_SECONDS = 2.0   # Min interval between autocomplete DB queries per user
@@ -52,15 +65,20 @@ class MissionPollCommands(commands.Cog):
         self._event_cache: dict[int, tuple[list, float]] = {}
         # Per-user cooldown tracker: {user_id: last_autocomplete_ts}
         self._autocomplete_timestamps: dict[int, float] = {}
+        # Track which (guild_id, event_date) combos already got an auto-poll today
+        self._auto_poll_fired: set[tuple[int, date]] = set()
 
     async def cog_load(self):
-        """Called when the cog is loaded. Start background task."""
+        """Called when the cog is loaded. Start background tasks."""
         self._poll_monitor_loop.start()
+        self._auto_poll_loop.start()
         logger.info("Mission poll monitor background task started")
+        logger.info("Auto mission poll background task started")
 
     async def cog_unload(self):
-        """Called when the cog is unloaded. Stop background task."""
+        """Called when the cog is unloaded. Stop background tasks."""
         self._poll_monitor_loop.cancel()
+        self._auto_poll_loop.cancel()
 
     # ─── Helper: get briefing channel ID from config (cached) ──────────
     async def _get_briefing_channel_id(self, guild_id: int, *, use_cache: bool = False) -> Optional[int]:
@@ -587,6 +605,294 @@ class MissionPollCommands(commands.Cog):
         if current:
             return [c for c in presets if current in str(c.value) or current.lower() in c.name.lower()]
         return presets
+
+    # ─── Background task: auto mission poll (every 1 minute) ─────────
+    @tasks.loop(minutes=1)
+    async def _auto_poll_loop(self):
+        """Check if it's time to create an automatic mission poll.
+
+        Fires at 21:30 Swedish time on Thursdays (for Sunday) and
+        Sundays (for the coming Thursday).
+        """
+        try:
+            now_se = datetime.now(_SWEDISH_TZ)
+
+            # Only fire at exactly 21:30 (within the 1-min loop window)
+            if now_se.hour != _AUTO_POLL_HOUR or now_se.minute != _AUTO_POLL_MINUTE:
+                return
+
+            # Thursday (weekday 3) → target next Sunday
+            # Sunday  (weekday 6) → target next Thursday
+            today_wd = now_se.weekday()
+            if today_wd == 3:  # Thursday
+                target_date = now_se.date() + timedelta(days=3)  # Sunday
+            elif today_wd == 6:  # Sunday
+                target_date = now_se.date() + timedelta(days=4)  # Thursday
+            else:
+                return  # Not a poll day
+
+            for guild in self.bot.guilds:
+                if guild.id != Config.GUILD_ID:
+                    continue
+                await self._try_auto_poll(guild, target_date)
+
+        except Exception as e:
+            logger.error(f"Auto-poll loop error: {e}", exc_info=True)
+
+    @_auto_poll_loop.before_loop
+    async def _before_auto_poll_loop(self):
+        await self.bot.wait_until_ready()
+
+    async def _try_auto_poll(self, guild: discord.Guild, target_date: date):
+        """Attempt to create an automatic mission poll for *target_date*."""
+        # De-duplicate: only fire once per (guild, date)
+        key = (guild.id, target_date)
+        if key in self._auto_poll_fired:
+            return
+        self._auto_poll_fired.add(key)
+
+        log_channel = await get_log_channel(guild)
+
+        # ── Config checks ──
+        config = await schedule_config_repository.get_config(guild.id)
+        if not config:
+            logger.warning("Auto-poll: no config for guild %s", guild.id)
+            return
+
+        events_channel_id = config.get("events_channel_id")
+        if not events_channel_id:
+            logger.info("Auto-poll: no events_channel_id configured, skipping")
+            return
+
+        events_channel = guild.get_channel(events_channel_id)
+        if not events_channel:
+            logger.warning("Auto-poll: events channel %s not found", events_channel_id)
+            return
+
+        briefing_channel_id = config.get("briefing_channel_id")
+        if not briefing_channel_id:
+            logger.warning("Auto-poll: no briefing channel configured")
+            return
+
+        # ── Find the target mission event ──
+        target_event = await event_repository.get_event_by_guild_date_type(
+            guild.id, target_date, "Mission"
+        )
+        if not target_event:
+            logger.info("Auto-poll: no Mission event found for %s", target_date)
+            return
+
+        # Skip if already assigned
+        if target_event.name and target_event.name.strip():
+            logger.info(
+                "Auto-poll: event for %s already has mission '%s', skipping",
+                target_date, target_event.name,
+            )
+            return
+
+        # Skip if an active poll already exists for this event
+        existing_poll = await mission_poll_repository.get_active_poll_for_event(target_event.id)
+        if existing_poll:
+            logger.info("Auto-poll: active poll already exists for event %s, skipping", target_event.id)
+            return
+
+        # ── Fetch & filter briefing threads ──
+        await forum_tag_service.ensure_cache(guild, briefing_channel_id)
+        all_threads = await fetch_all_forum_threads(guild, briefing_channel_id)
+        filtered = filter_threads_by_tags(all_threads, _AUTO_POLL_FRAMEWORK, _AUTO_POLL_COMPOSITION)
+
+        # Deduplication
+        excluded_ids, _ = await get_excluded_thread_ids(guild.id, filtered, weeks=_AUTO_POLL_EXCLUSION_WEEKS)
+        remaining = [t for t in filtered if t.id not in excluded_ids]
+
+        # ── No missions ──
+        if len(remaining) == 0:
+            msg = (
+                f"⚠️ **Auto-Poll Skipped** — No missions matched the filter for "
+                f"**{format_event_date(target_date)}**.\n"
+                f"Framework: {_AUTO_POLL_FRAMEWORK} | Composition: {_AUTO_POLL_COMPOSITION} | "
+                f"Exclusion: {_AUTO_POLL_EXCLUSION_WEEKS} weeks"
+            )
+            logger.warning("Auto-poll: %s", msg)
+            if log_channel:
+                try:
+                    await log_channel.send(msg)
+                except Exception:
+                    pass
+            return
+
+        # ── Single mission — auto-schedule directly ──
+        if len(remaining) == 1:
+            await self._auto_schedule_single_mission(
+                guild, target_event, remaining[0], config, log_channel, events_channel,
+            )
+            return
+
+        # ── Multiple missions — create poll ──
+        selected = remaining
+        if len(remaining) > _AUTO_POLL_OPTIONS:
+            random.shuffle(remaining)
+            selected = remaining[:_AUTO_POLL_OPTIONS]
+
+        fw_abbrev = abbreviate_framework(_AUTO_POLL_FRAMEWORK)
+        poll_title = f"{format_event_date(target_date)} - Mission Poll [{fw_abbrev}]"
+
+        thread_data = []
+        poll = discord.Poll(
+            question=poll_title,
+            duration=timedelta(hours=_AUTO_POLL_DURATION_HOURS),
+            multiple=True,
+        )
+        for thread in selected:
+            comp_tags = get_thread_composition_tags(thread)
+            answer_text = format_poll_answer(thread.name, comp_tags)
+            poll.add_answer(text=answer_text)
+            thread_data.append((thread, answer_text, comp_tags))
+
+        poll_end_dt = datetime.now(timezone.utc) + timedelta(hours=_AUTO_POLL_DURATION_HOURS)
+
+        active_role = discord.utils.get(guild.roles, name="Active")
+        poll_content = f"{active_role.mention} Vote for the next mission!" if active_role else None
+
+        try:
+            poll_message = await events_channel.send(
+                content=poll_content,
+                poll=poll,
+                allowed_mentions=discord.AllowedMentions(roles=True),
+            )
+        except Exception as e:
+            logger.error(f"Auto-poll: failed to send poll: {e}")
+            if log_channel:
+                try:
+                    await log_channel.send(f"❌ **Auto-Poll Failed** — Could not send poll: {e}")
+                except Exception:
+                    pass
+            return
+
+        # Build and send links embed
+        links_title = f"{format_event_date(target_date)} - Mission Briefings [{fw_abbrev}]"
+        links_lines = []
+        for thread, _, comp_tags in thread_data:
+            thread_url = f"https://discord.com/channels/{guild.id}/{thread.id}"
+            links_lines.append(format_link_entry(thread.name, comp_tags, thread_url))
+
+        links_embed = discord.Embed(
+            title=links_title,
+            description="\n".join(links_lines),
+            color=discord.Color.blue(),
+        )
+        links_message = None
+        try:
+            links_message = await events_channel.send(embed=links_embed)
+        except Exception as e:
+            logger.error(f"Auto-poll: failed to send links embed: {e}")
+
+        # Save poll to database
+        mission_thread_ids = [t.id for t, _, _ in thread_data]
+        await mission_poll_repository.create_poll(
+            guild_id=guild.id,
+            poll_message_id=poll_message.id,
+            channel_id=events_channel.id,
+            target_event_id=target_event.id,
+            framework_filter=_AUTO_POLL_FRAMEWORK,
+            composition_filter=_AUTO_POLL_COMPOSITION,
+            mission_thread_ids=mission_thread_ids,
+            poll_end_time=poll_end_dt,
+            created_by=self.bot.user.id,
+            links_message_id=links_message.id if links_message else None,
+        )
+
+        logger.info(
+            "Auto-poll: created poll for %s with %d options in #%s",
+            format_event_date(target_date), len(selected), events_channel.name,
+        )
+
+    async def _auto_schedule_single_mission(
+        self,
+        guild: discord.Guild,
+        target_event,
+        thread: discord.Thread,
+        config: dict,
+        log_channel: Optional[discord.TextChannel],
+        events_channel: discord.TextChannel,
+    ):
+        """Auto-schedule when only one mission matches the filter."""
+        author_name = await extract_author_from_thread(thread)
+        mission_name = thread.name
+
+        success = await event_repository.update_event(
+            target_event.id,
+            name=mission_name,
+            creator_id=0,
+            creator_name=author_name,
+        )
+        if not success:
+            logger.error("Auto-poll: failed to update event %s", target_event.id)
+            if log_channel:
+                try:
+                    await log_channel.send(
+                        f"❌ **Auto-Schedule Failed** — Could not update event for "
+                        f"**{format_event_date(target_event.date)}**."
+                    )
+                except Exception:
+                    pass
+            return
+
+        logger.info(
+            "Auto-poll: single mission '%s' auto-scheduled for %s",
+            mission_name, format_event_date(target_event.date),
+        )
+
+        # ── Update Raid-Helper event with briefing content ──
+        rh_updated = False
+        try:
+            training_name = ""
+            instructor_name = ""
+            if target_event.date.weekday() == 3:  # Thursday
+                training_event = await event_repository.get_event_by_guild_date_type(
+                    guild.id, target_event.date, "Training"
+                )
+                if training_event:
+                    training_name = training_event.name or ""
+                    instructor_name = training_event.creator_name or ""
+
+            rh_error = await raid_helper_service.update_event_from_briefing(
+                server_id=guild.id,
+                event_date=target_event.date,
+                briefing_thread=thread,
+                training_name=training_name,
+                instructor_name=instructor_name,
+            )
+            rh_updated = not rh_error
+            if not rh_updated:
+                logger.warning("Auto-poll: Raid-Helper update failed: %s", rh_error)
+        except Exception as e:
+            logger.warning("Auto-poll: failed to update Raid-Helper event: %s", e)
+
+        # ── Update schedule embed ──
+        try:
+            from services.schedule_embed_service import build_schedule_embed
+
+            sched_channel = guild.get_channel(config["channel_id"])
+            if sched_channel:
+                msg = await sched_channel.fetch_message(config["message_id"])
+                embed = await build_schedule_embed(guild)
+                await msg.edit(embed=embed)
+        except Exception as e:
+            logger.warning("Auto-poll: failed to update schedule embed: %s", e)
+
+        # ── Announce in events channel ──
+        announcement = (
+            f"✅ Only one mission matched the auto-poll filter — **{mission_name}** "
+            f"has been automatically scheduled for **{format_event_date(target_event.date)}**."
+        )
+        if rh_updated:
+            announcement += "\n📋 Raid-Helper event updated with briefing content."
+
+        try:
+            await events_channel.send(announcement)
+        except Exception as e:
+            logger.warning("Auto-poll: failed to send announcement: %s", e)
 
     # ─── Background task: poll monitor (every 1 minute) ──────────────
     @tasks.loop(minutes=1)

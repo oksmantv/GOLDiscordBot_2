@@ -178,6 +178,80 @@ class ConfigureCommand(commands.Cog):
         print(f"[DEBUG] message_id_autocomplete: choices={choices}")
         return choices[:25]
 
+    # ─── /configureevents — Admin-only events channel configure ─────────
+    @app_commands.guilds(Config.GUILD_ID)
+    @app_commands.command(
+        name="configureevents",
+        description="Configure the text channel where Raid-Helper events are posted (admin only)",
+    )
+    @app_commands.describe(
+        events_channel_id="Select the text channel where Raid-Helper posts events",
+    )
+    async def configureevents_command(
+        self,
+        interaction: discord.Interaction,
+        events_channel_id: str,
+    ):
+        """Admin-only command to set the events channel for auto-polls."""
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message(
+                "❌ This command can only be used in a server.", ephemeral=True
+            )
+            return
+
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message(
+                "❌ Only server admins can use this command.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            channel_id_int = int(events_channel_id)
+        except (ValueError, TypeError):
+            await interaction.followup.send("❌ Invalid channel ID.", ephemeral=True)
+            return
+
+        channel = guild.get_channel(channel_id_int)
+        if not channel or channel.type not in (discord.ChannelType.text, discord.ChannelType.news):
+            await interaction.followup.send(
+                "❌ The selected channel must be a text channel.", ephemeral=True
+            )
+            return
+
+        config = await schedule_config_repository.get_config(guild.id)
+        if not config:
+            await interaction.followup.send(
+                "❌ Base configuration not found. Run `/configure` first.",
+                ephemeral=True,
+            )
+            return
+
+        await schedule_config_repository.update_events_channel(guild.id, channel_id_int)
+        await interaction.followup.send(
+            f"✅ Events channel set to {channel.mention}. "
+            "Auto mission polls will be posted here.",
+            ephemeral=True,
+        )
+
+    @configureevents_command.autocomplete("events_channel_id")
+    async def configureevents_channel_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        guild = interaction.guild
+        if not guild:
+            return []
+        choices = []
+        for channel in guild.text_channels:
+            if current.lower() in channel.name.lower():
+                choices.append(
+                    app_commands.Choice(name=f"#{channel.name}", value=str(channel.id))
+                )
+        return choices[:25]
+
+
 async def setup(bot):
     print('[DEBUG] setup() called in configure_command.py')
     cog = ConfigureCommand(bot)

@@ -24,9 +24,16 @@ class ScheduleConfigRepository:
         """
         await db_connection.execute_command(query, guild_id, feedback_channel_id)
 
+    async def update_events_channel(self, guild_id: int, events_channel_id: int):
+        """Update only the events channel for an existing config."""
+        query = """
+        UPDATE schedule_config SET events_channel_id = $2 WHERE guild_id = $1;
+        """
+        await db_connection.execute_command(query, guild_id, events_channel_id)
+
     async def get_config(self, guild_id: int):
         query = """
-        SELECT channel_id, message_id, briefing_channel_id, log_channel_id, feedback_channel_id FROM schedule_config WHERE guild_id = $1;
+        SELECT channel_id, message_id, briefing_channel_id, log_channel_id, feedback_channel_id, events_channel_id FROM schedule_config WHERE guild_id = $1;
         """
         result = await db_connection.execute_single(query, guild_id)
         if result:
@@ -35,7 +42,8 @@ class ScheduleConfigRepository:
                 "message_id": result[1],
                 "briefing_channel_id": result[2],
                 "log_channel_id": result[3],
-                "feedback_channel_id": result[4]
+                "feedback_channel_id": result[4],
+                "events_channel_id": result[5],
             }
         return None
 

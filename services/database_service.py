@@ -175,6 +175,11 @@ async def initialize_database():
         ADD COLUMN IF NOT EXISTS feedback_channel_id BIGINT;
     """
 
+    ensure_events_channel_id_query = """
+    ALTER TABLE schedule_config
+        ADD COLUMN IF NOT EXISTS events_channel_id BIGINT;
+    """
+
     try:
         await db_connection.execute_command(create_events_table_query)
         await db_connection.execute_command(create_index_query)
@@ -197,6 +202,7 @@ async def initialize_database():
         await db_connection.execute_command(create_feedback_posts_table_query)
         await db_connection.execute_command(create_feedback_posts_index_query)
         await db_connection.execute_command(ensure_feedback_channel_id_query)
+        await db_connection.execute_command(ensure_events_channel_id_query)
         print("Database tables initialized successfully")
         return True
     except Exception as e:
