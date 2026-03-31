@@ -241,29 +241,25 @@ class RaidHelperService:
         if description is not None:
             payload["description"] = description
 
-        # Send image as a top-level field
-        if image is not None:
-            payload["image"] = image
-
-        # Build advancedSettings for other settings
-        adv_parts: list[str] = []
-        if attendance is not None:
-            adv_parts.append(f"attendance: {attendance}")
-
-        if adv_parts:
-            payload["advancedSettings"] = "\n".join(adv_parts)
-
-        # DEBUG: Fetch current event to inspect field structure
+        # DEBUG: Fetch current event to inspect advancedSettings keys and image handling
         current = await self.get_event(event_message_id)
         if current:
-            logger.info(
-                f"DEBUG event {event_message_id} top-level keys: {list(current.keys())}"
-            )
-            for key in ("image", "advancedSettings", "advanced_settings", "imageUrl",
-                        "image_url", "settings", "templateId"):
-                if key in current:
-                    val = current[key]
-                    logger.info(f"DEBUG event field '{key}': {str(val)[:300]}")
+            adv = current.get("advancedSettings", {})
+            if isinstance(adv, dict):
+                logger.info(f"DEBUG advancedSettings keys: {list(adv.keys())}")
+                for k in adv:
+                    if "image" in k.lower() or "img" in k.lower():
+                        logger.info(f"DEBUG advancedSettings['{k}']: {adv[k]}")
+
+        # advancedSettings is a dict in v4 — send image and attendance inside it
+        adv_settings: dict = {}
+        if image is not None:
+            adv_settings["image"] = image
+        if attendance is not None:
+            adv_settings["attendance"] = attendance
+
+        if adv_settings:
+            payload["advancedSettings"] = adv_settings
 
         # Log the full payload for debugging
         logger.info(f"Raid-Helper PATCH payload for event {event_message_id}: {payload}")
