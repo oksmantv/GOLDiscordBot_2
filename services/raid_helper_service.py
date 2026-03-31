@@ -43,7 +43,7 @@ class RaidHelperService:
         Returns a list of event dicts with at least:
           id, channelId, startTime, title, ...
         """
-        url = f"{RAID_HELPER_API_V3}/servers/{server_id}/events"
+        url = f"{RAID_HELPER_API_V2}/servers/{server_id}/events"
         headers = self._auth_headers
         if not headers:
             logger.warning("No RAID_HELPER_API_TOKEN configured — cannot list server events")
