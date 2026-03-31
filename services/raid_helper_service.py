@@ -60,6 +60,9 @@ class RaidHelperService:
                         if isinstance(data, list):
                             events = data
                         elif isinstance(data, dict):
+                            logger.debug(
+                                f"Raid-Helper response keys: {list(data.keys())}"
+                            )
                             events = data.get("postedEvents", data.get("events", []))
                         else:
                             events = []
@@ -88,19 +91,30 @@ class RaidHelperService:
         """
         events = await self.get_server_events(server_id)
         if not events:
+            logger.warning(f"Raid-Helper returned no events for server {server_id}")
             return None
 
+        logger.info(
+            f"Searching {len(events)} Raid-Helper events for date {event_date}"
+        )
         for ev in events:
             start_time = ev.get("startTime")
             if not start_time:
+                logger.debug(f"Event {ev.get('id', '?')} has no startTime, keys: {list(ev.keys())}")
                 continue
 
             try:
                 # startTime is a Unix timestamp (seconds)
                 ev_dt = datetime.fromtimestamp(int(start_time), tz=timezone.utc)
                 ev_date_uk = ev_dt.astimezone(UK_TZ).date()
-            except (ValueError, TypeError, OSError):
+            except (ValueError, TypeError, OSError) as exc:
+                logger.debug(f"Event {ev.get('id', '?')} startTime parse error: {exc}")
                 continue
+
+            logger.debug(
+                f"Event {ev.get('id', '?')} '{ev.get('title', '?')}': "
+                f"startTime={start_time} -> UK date={ev_date_uk} (looking for {event_date})"
+            )
 
             if ev_date_uk == event_date:
                 event_id = ev.get("id")
@@ -111,7 +125,7 @@ class RaidHelperService:
                     )
                     return int(event_id)
 
-        logger.info(f"No Raid-Helper event found for date {event_date}")
+        logger.warning(f"No Raid-Helper event matched date {event_date} out of {len(events)} events")
         return None
 
     # ── Single event detail (v2, public, no auth) ─────────────────────
