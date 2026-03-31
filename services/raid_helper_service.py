@@ -253,6 +253,18 @@ class RaidHelperService:
         if adv_parts:
             payload["advancedSettings"] = "\n".join(adv_parts)
 
+        # DEBUG: Fetch current event to inspect field structure
+        current = await self.get_event(event_message_id)
+        if current:
+            logger.info(
+                f"DEBUG event {event_message_id} top-level keys: {list(current.keys())}"
+            )
+            for key in ("image", "advancedSettings", "advanced_settings", "imageUrl",
+                        "image_url", "settings", "templateId"):
+                if key in current:
+                    val = current[key]
+                    logger.info(f"DEBUG event field '{key}': {str(val)[:300]}")
+
         # Log the full payload for debugging
         logger.info(f"Raid-Helper PATCH payload for event {event_message_id}: {payload}")
 
