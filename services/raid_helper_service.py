@@ -280,6 +280,8 @@ class RaidHelperService:
         is_thursday: bool,
         training_name: str = "",
         instructor_name: str = "",
+        briefing_title: str = "",
+        briefing_link: str = "",
     ) -> str:
         """Build the Raid-Helper event description using fixed headers
         and dynamic content.
@@ -288,14 +290,24 @@ class RaidHelperService:
             ## Training :training:
             **{training_name} by {instructor_name}**
             ## Mission :mission:
+            ### :whiteboard_Ca: [Title](link)
             {briefing post content}
 
         Sunday format (no training):
+            ### :whiteboard_Ca: [Title](link)
             {briefing post content}
 
         The briefing_content is the raw starter message from the
         mission briefing forum thread.
         """
+        # Build the briefing title heading if we have both title and link
+        briefing_heading = ""
+        if briefing_title and briefing_link:
+            briefing_heading = (
+                f"### <:whiteboard_Ca:1413272112843722833> "
+                f"[{briefing_title}]({briefing_link})\n"
+            )
+
         if is_thursday:
             # Training line
             training_info = "**TBA**"
@@ -311,11 +323,12 @@ class RaidHelperService:
 
             return (
                 f"## Training <:Training:1173686838926512199>\n{training_info}\n"
-                f"## Mission <:Mission:1173686836451885076>\n{mission_info}"
+                f"## Mission <:Mission:1173686836451885076>\n{briefing_heading}{mission_info}"
             )
         else:
             # Sunday: just the mission briefing content
-            return briefing_content.strip() if briefing_content else ""
+            content = briefing_content.strip() if briefing_content else ""
+            return f"{briefing_heading}{content}" if briefing_heading else content
 
     @staticmethod
     def extract_image_from_message(message: discord.Message) -> str | None:
@@ -390,6 +403,12 @@ class RaidHelperService:
             logger.info(msg)
             return msg
 
+        # Build briefing link from thread
+        briefing_title = briefing_thread.name
+        briefing_link = (
+            f"https://discord.com/channels/{briefing_thread.guild.id}/{briefing_thread.id}"
+        )
+
         # Build description
         is_thursday = event_date.weekday() == 3
         description = self.build_event_description(
@@ -397,6 +416,8 @@ class RaidHelperService:
             is_thursday=is_thursday,
             training_name=training_name,
             instructor_name=instructor_name,
+            briefing_title=briefing_title,
+            briefing_link=briefing_link,
         )
 
         if not description:
