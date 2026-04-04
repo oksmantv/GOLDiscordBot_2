@@ -303,8 +303,9 @@ class RaidHelperService:
         # Build the briefing title heading if we have both title and link
         briefing_heading = ""
         if briefing_title and briefing_link:
+            heading_level = "###" if is_thursday else "##"
             briefing_heading = (
-                f"### <:whiteboard_Ca:1413272112843722833> "
+                f"{heading_level} <:whiteboard_Ca:1413272112843722833> "
                 f"[{briefing_title}]({briefing_link})\n"
             )
 
