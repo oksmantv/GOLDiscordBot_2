@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+from version import __version__
 
 # Load environment variables from .env file
 load_dotenv()
@@ -17,7 +18,7 @@ class Config:
     # Bot Configuration
     BOT_PREFIX = os.getenv('BOT_PREFIX', '!')
     DEBUG_MODE = os.getenv('DEBUG_MODE', 'False').lower() == 'true'
-    BOT_VERSION = os.getenv('BOT_VERSION', 'v1.0.0')
+    BOT_VERSION = os.getenv('BOT_VERSION', __version__)
 
     # Raid-Helper API (server-level token from https://raid-helper.xyz/dashboard)
     RAID_HELPER_API_TOKEN = os.getenv('RAID_HELPER_API_TOKEN', '')

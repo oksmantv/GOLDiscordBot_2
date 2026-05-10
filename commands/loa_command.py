@@ -519,6 +519,9 @@ class LOACommands(commands.Cog):
                         # 1. Remove @Active for LOAs that have started
                         if start_date <= today:
                             await remove_active_role(guild, loa_entry["user_id"])
+                            # Planned → Active transition: embed must reflect new category
+                            if start_date == today:
+                                summary_needs_update = True
 
                         # 2. Expire LOAs whose end date has passed
                         if end_date < today:
