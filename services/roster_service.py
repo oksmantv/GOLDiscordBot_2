@@ -239,7 +239,7 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
 
     # ── Split Hellfish into Leadership, Senior Enlisted, Enlisted ──
     LEADERSHIP_PREFIXES = {"1Lt.", "2Lt.", "Sgt.", "Cpl."}
-    SENIOR_ENLISTED_PREFIXES = {"LCpl.", "Spc.", "Pfc."}
+    SENIOR_ENLISTED_PREFIXES = {"LCpl.", "Spc."}
     fh_leadership: list[dict] = []
     fh_senior: list[dict] = []
     fh_enlisted: list[dict] = []

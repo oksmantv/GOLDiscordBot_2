@@ -45,6 +45,12 @@ _AUTO_POLL_EXCLUSION_WEEKS = 8
 _AUTO_POLL_HOUR = 21
 _AUTO_POLL_MINUTE = 30
 
+# Raid-Helper posting times (Swedish time) + 5-minute delay for the init update:
+#   Sunday  20:55 → posts Thursday event  → bot fires Sunday  21:00
+#   Thursday 21:00 → posts Sunday event   → bot fires Thursday 21:05
+_RH_INIT_UPDATE_SUNDAY = (21, 0)    # (hour, minute) bot fires on Sunday
+_RH_INIT_UPDATE_THURSDAY = (21, 5)  # (hour, minute) bot fires on Thursday
+
 
 # ─── Autocomplete cache settings ──────────────────────────────────
 _AUTOCOMPLETE_COOLDOWN_SECONDS = 2.0   # Min interval between autocomplete DB queries per user
@@ -67,18 +73,23 @@ class MissionPollCommands(commands.Cog):
         self._autocomplete_timestamps: dict[int, float] = {}
         # Track which (guild_id, event_date) combos already got an auto-poll today
         self._auto_poll_fired: set[tuple[int, date]] = set()
+        # Track which (guild_id, event_date) combos already got a post-creation RH update today
+        self._rh_init_update_fired: set[tuple[int, date]] = set()
 
     async def cog_load(self):
         """Called when the cog is loaded. Start background tasks."""
         self._poll_monitor_loop.start()
         self._auto_poll_loop.start()
+        self._rh_init_update_loop.start()
         logger.info("Mission poll monitor background task started")
         logger.info("Auto mission poll background task started")
+        logger.info("Raid-Helper post-creation update task started")
 
     async def cog_unload(self):
         """Called when the cog is unloaded. Stop background tasks."""
         self._poll_monitor_loop.cancel()
         self._auto_poll_loop.cancel()
+        self._rh_init_update_loop.cancel()
 
     # ─── Helper: get briefing channel ID from config (cached) ──────────
     async def _get_briefing_channel_id(self, guild_id: int, *, use_cache: bool = False) -> Optional[int]:
@@ -486,6 +497,169 @@ class MissionPollCommands(commands.Cog):
                 pass
         await interaction.followup.send(confirmation_msg, ephemeral=True)
 
+    # ─── /missionlist command ──────────────────────────────────────────
+    @app_commands.guilds(Config.GUILD_ID)
+    @app_commands.command(
+        name="missionlist",
+        description="Post a randomized list of mission briefing links for backup selection",
+    )
+    @app_commands.describe(
+        framework="Select the framework version to filter missions",
+        options="Number of missions to show (default: 5, min: 3, max: 15)",
+        composition="Filter by composition type (default: All)",
+        exclusion_weeks="How many weeks back to check for recently played missions (default: 8)",
+    )
+    async def missionlist_command(
+        self,
+        interaction: discord.Interaction,
+        framework: str,
+        options: app_commands.Range[int, 3, 15] = 5,
+        composition: str = "All",
+        exclusion_weeks: int = 8,
+    ):
+        """Handle the /missionlist command — post a randomized mission list embed."""
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message(
+                "❌ This command can only be used in a server.", ephemeral=True
+            )
+            return
+
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            member = await guild.fetch_member(interaction.user.id)
+        is_admin = any(getattr(r.permissions, "administrator", False) for r in member.roles)
+        has_editor = any(r.name.strip().lower() == "editor" for r in member.roles)
+        if not (is_admin or has_editor):
+            await interaction.response.send_message(
+                "❌ You must be an admin or have the @Editor role to use this command.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        if exclusion_weeks not in (2, 4, 6, 8):
+            await interaction.followup.send(
+                "❌ Exclusion weeks must be one of: 2, 4, 6, 8.", ephemeral=True
+            )
+            return
+
+        # ── Get briefing channel ──
+        briefing_channel_id = await self._get_briefing_channel_id(guild.id)
+        if not briefing_channel_id:
+            await interaction.followup.send(
+                "❌ No briefing forum channel configured. Use `/configure` first.",
+                ephemeral=True,
+            )
+            return
+
+        await forum_tag_service.ensure_cache(guild, briefing_channel_id)
+
+        # ── Fetch & filter threads ──
+        all_threads = await fetch_all_forum_threads(guild, briefing_channel_id)
+        filtered = filter_threads_by_tags(all_threads, framework, composition)
+
+        # ── Deduplicate recently played missions ──
+        excluded_ids, _ = await get_excluded_thread_ids(guild.id, filtered, weeks=exclusion_weeks)
+        remaining = [t for t in filtered if t.id not in excluded_ids]
+
+        if not remaining:
+            await interaction.followup.send(
+                "❌ No missions found matching your criteria. Try a different framework, "
+                "composition, or reduce the exclusion window.",
+                ephemeral=True,
+            )
+            return
+
+        # ── Random selection ──
+        random.shuffle(remaining)
+        selected = remaining[:options]
+
+        # ── Build embed ──
+        fw_abbrev = abbreviate_framework(framework)
+        comp_label = f" [{composition}]" if composition.lower() != "all" else ""
+        embed_title = f"Backup Mission List [{fw_abbrev}]{comp_label}"
+
+        lines = []
+        for i, thread in enumerate(selected, start=1):
+            comp_tags = get_thread_composition_tags(thread)
+            thread_url = f"https://discord.com/channels/{guild.id}/{thread.id}"
+            entry = format_link_entry(thread.name, comp_tags, thread_url)
+            lines.append(f"{i}. {entry}")
+
+        footer_text = (
+            f"{len(selected)} of {len(remaining)} eligible missions shown"
+            f" • Excluded last {exclusion_weeks} weeks"
+        )
+
+        embed = discord.Embed(
+            title=embed_title,
+            description="\n".join(lines),
+            color=discord.Color.green(),
+        )
+        embed.set_footer(text=footer_text)
+
+        await interaction.channel.send(embed=embed)
+        await interaction.followup.send(
+            f"✅ Mission list posted with {len(selected)} missions.", ephemeral=True
+        )
+
+    # ─── Autocomplete: missionlist framework ────────────────────────────
+    @missionlist_command.autocomplete("framework")
+    async def missionlist_framework_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        try:
+            guild = interaction.guild
+            if not guild:
+                return []
+            if self._is_autocomplete_throttled(interaction.user.id):
+                return self._filter_framework_choices(current)
+            briefing_channel_id = await self._get_briefing_channel_id(guild.id, use_cache=True)
+            if not briefing_channel_id:
+                return [app_commands.Choice(name="⚠️ Run /configure first", value="NONE")]
+            await forum_tag_service.ensure_cache(guild, briefing_channel_id)
+            return self._filter_framework_choices(current)
+        except Exception as e:
+            logger.error(f"Missionlist framework autocomplete error: {e}")
+            return self._filter_framework_choices(current)
+
+    # ─── Autocomplete: missionlist composition ───────────────────────────
+    @missionlist_command.autocomplete("composition")
+    async def missionlist_composition_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        try:
+            guild = interaction.guild
+            if not guild:
+                return []
+            if self._is_autocomplete_throttled(interaction.user.id):
+                return self._filter_composition_choices(current)
+            briefing_channel_id = await self._get_briefing_channel_id(guild.id, use_cache=True)
+            if not briefing_channel_id:
+                return [app_commands.Choice(name="⚠️ Run /configure first", value="NONE")]
+            await forum_tag_service.ensure_cache(guild, briefing_channel_id)
+            return self._filter_composition_choices(current)
+        except Exception as e:
+            logger.error(f"Missionlist composition autocomplete error: {e}")
+            return self._filter_composition_choices(current)
+
+    # ─── Autocomplete: missionlist exclusion_weeks ──────────────────────
+    @missionlist_command.autocomplete("exclusion_weeks")
+    async def missionlist_exclusion_weeks_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[int]]:
+        presets = [
+            app_commands.Choice(name="2 weeks — minimal exclusion", value=2),
+            app_commands.Choice(name="4 weeks — short window", value=4),
+            app_commands.Choice(name="6 weeks — medium window", value=6),
+            app_commands.Choice(name="8 weeks — full exclusion (default)", value=8),
+        ]
+        if current:
+            return [c for c in presets if current in str(c.value) or current.lower() in c.name.lower()]
+        return presets
+
     # ─── Autocomplete: framework ───────────────────────────────────────
     @missionpoll_command.autocomplete("framework")
     async def framework_autocomplete(
@@ -642,6 +816,103 @@ class MissionPollCommands(commands.Cog):
     @_auto_poll_loop.before_loop
     async def _before_auto_poll_loop(self):
         await self.bot.wait_until_ready()
+
+    # ─── Background task: initial RH event update after posting (every 1 minute) ─
+    @tasks.loop(minutes=1)
+    async def _rh_init_update_loop(self):
+        """Push a placeholder description to a Raid-Helper event shortly after it
+        is posted.
+
+        Raid-Helper posting schedule (Swedish time):
+          Sunday  20:55 → posts next Thursday's event
+          Thursday 21:00 → posts next Sunday's event
+        This task fires 5 minutes later on each respective day to initialise
+        the event description with whatever data is already known.
+        """
+        try:
+            now_se = datetime.now(_SWEDISH_TZ)
+            today_wd = now_se.weekday()
+            hh, mm = now_se.hour, now_se.minute
+
+            if today_wd == 6 and (hh, mm) == _RH_INIT_UPDATE_SUNDAY:  # Sunday → Thursday event
+                target_date = now_se.date() + timedelta(days=4)
+            elif today_wd == 3 and (hh, mm) == _RH_INIT_UPDATE_THURSDAY:  # Thursday → Sunday event
+                target_date = now_se.date() + timedelta(days=3)
+            else:
+                return
+
+            for guild in self.bot.guilds:
+                if guild.id != Config.GUILD_ID:
+                    continue
+                key = (guild.id, target_date)
+                if key in self._rh_init_update_fired:
+                    continue
+                self._rh_init_update_fired.add(key)
+                await self._do_rh_init_update(guild, target_date)
+
+        except Exception as e:
+            logger.error("RH init-update loop error: %s", e, exc_info=True)
+
+    @_rh_init_update_loop.before_loop
+    async def _before_rh_init_update_loop(self):
+        await self.bot.wait_until_ready()
+
+    async def _do_rh_init_update(self, guild: discord.Guild, target_date: date):
+        """Update the freshly created Raid-Helper event with initial placeholder content.
+
+        For Thursday events the description gets Training + Mission TBA headers
+        (with real training data from the DB if already scheduled).
+        Sunday events have no training component and no briefing at this stage,
+        so they are skipped — the update will happen when the poll resolves.
+        """
+        is_thursday = target_date.weekday() == 3
+
+        # For Thursday events look up any training already in the DB.
+        training_name = ""
+        instructor_name = ""
+        if is_thursday:
+            training_event = await event_repository.get_event_by_guild_date_type(
+                guild.id, target_date, "Training"
+            )
+            if training_event:
+                training_name = training_event.name or ""
+                instructor_name = training_event.creator_name or ""
+
+        # build_event_description returns "" for Sunday with no briefing content.
+        description = raid_helper_service.build_event_description(
+            "",
+            is_thursday=is_thursday,
+            training_name=training_name,
+            instructor_name=instructor_name,
+        )
+
+        if not description:
+            logger.info(
+                "RH init-update: skipping %s (Sunday event — no initial content to set)",
+                target_date,
+            )
+            return
+
+        event_id = await raid_helper_service.find_event_id_by_date(guild.id, target_date)
+        if not event_id:
+            logger.warning(
+                "RH init-update: no Raid-Helper event found for %s "
+                "— event may not have been posted yet",
+                target_date,
+            )
+            return
+
+        success = await raid_helper_service.update_event(event_id, description=description)
+        if success:
+            logger.info(
+                "RH init-update: set initial placeholder description on Raid-Helper event for %s",
+                target_date,
+            )
+        else:
+            logger.warning(
+                "RH init-update: failed to update Raid-Helper event for %s",
+                target_date,
+            )
 
     async def _try_auto_poll(self, guild: discord.Guild, target_date: date):
         """Attempt to create an automatic mission poll for *target_date*."""
