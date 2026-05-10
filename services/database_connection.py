@@ -55,5 +55,11 @@ class DatabaseConnection:
         async with pool.acquire() as connection:
             return await connection.execute(query, *args)
 
+    async def execute_many(self, query: str, args_list: list):
+        """Execute a parameterised statement for multiple rows (bulk writes)."""
+        pool = await self.get_connection()
+        async with pool.acquire() as connection:
+            return await connection.executemany(query, args_list)
+
 # Singleton instance
 db_connection = DatabaseConnection()

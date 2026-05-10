@@ -102,6 +102,46 @@ class EventRepository:
         result = await db_connection.execute_command(query, event_id)
         return result == "DELETE 1"
     
+    async def bulk_create_events(self, events: List[Event]) -> dict:
+        """Insert multiple events in one statement, skipping duplicates.
+
+        The UNIQUE constraint on (guild_id, date, type) handles conflicts
+        without needing a prior SELECT per row.
+        Returns a summary dict: {created, skipped, failed, total}.
+        """
+        if not events:
+            return {"created": 0, "skipped": 0, "failed": 0, "total": 0}
+
+        guild_ids    = [e.guild_id for e in events]
+        dates        = [e.date if isinstance(e.date, date) else e.date.date() for e in events]
+        types        = [e.type for e in events]
+        names        = [e.name for e in events]
+        creator_ids  = [e.creator_id for e in events]
+        creator_names = [e.creator_name for e in events]
+
+        query = """
+        INSERT INTO events (guild_id, date, type, name, creator_id, creator_name)
+        SELECT * FROM UNNEST(
+            $1::BIGINT[], $2::DATE[], $3::TEXT[], $4::TEXT[], $5::BIGINT[], $6::TEXT[]
+        ) AS t(guild_id, date, type, name, creator_id, creator_name)
+        ON CONFLICT (guild_id, date, type) DO NOTHING;
+        """
+        result = await db_connection.execute_command(
+            query, guild_ids, dates, types, names, creator_ids, creator_names
+        )
+        try:
+            inserted = int(result.split()[-1])
+        except (ValueError, IndexError, AttributeError):
+            inserted = 0
+
+        total = len(events)
+        return {
+            "created": inserted,
+            "skipped": total - inserted,
+            "failed": 0,
+            "total": total,
+        }
+
     async def get_all_events_by_guild(self, guild_id: int) -> List[Event]:
         """Get all events for a guild."""
         query = """

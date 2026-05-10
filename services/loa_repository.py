@@ -64,10 +64,24 @@ class LOARepository:
         query = "UPDATE leave_of_absence SET expired = TRUE WHERE id = $1;"
         await db_connection.execute_command(query, loa_id)
 
+    async def mark_expired_bulk(self, loa_ids: list[int]) -> None:
+        """Mark multiple LOAs as expired in one query."""
+        if not loa_ids:
+            return
+        query = "UPDATE leave_of_absence SET expired = TRUE WHERE id = ANY($1::INT[]);"
+        await db_connection.execute_command(query, loa_ids)
+
     async def mark_notified(self, loa_id: int) -> None:
         """Mark an LOA as notified (user has been DM'd about expiry)."""
         query = "UPDATE leave_of_absence SET notified = TRUE WHERE id = $1;"
         await db_connection.execute_command(query, loa_id)
+
+    async def mark_notified_bulk(self, loa_ids: list[int]) -> None:
+        """Mark multiple LOAs as notified in one query."""
+        if not loa_ids:
+            return
+        query = "UPDATE leave_of_absence SET notified = TRUE WHERE id = ANY($1::INT[]);"
+        await db_connection.execute_command(query, loa_ids)
 
     async def update_message_info(self, loa_id: int, message_id: int, channel_id: int) -> None:
         """Update the announcement message ID and channel ID for an LOA."""

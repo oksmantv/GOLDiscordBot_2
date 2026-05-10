@@ -108,6 +108,45 @@ class RosterRepository:
         row = await db_connection.execute_single(query, guild_id)
         return row[0] if row else 0
 
+    async def bulk_upsert_members(self, rows: list[tuple]) -> None:
+        """Upsert all roster members in a single round-trip."""
+        if not rows:
+            return
+        query = """
+        INSERT INTO roster_members
+            (guild_id, user_id, nickname, rank_prefix, rank_name,
+             rank_order, is_active, is_reserve, subgroup, on_loa,
+             last_seen, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
+        ON CONFLICT (guild_id, user_id)
+        DO UPDATE SET
+            nickname    = EXCLUDED.nickname,
+            rank_prefix = EXCLUDED.rank_prefix,
+            rank_name   = EXCLUDED.rank_name,
+            rank_order  = EXCLUDED.rank_order,
+            is_active   = EXCLUDED.is_active,
+            is_reserve  = EXCLUDED.is_reserve,
+            subgroup    = EXCLUDED.subgroup,
+            on_loa      = EXCLUDED.on_loa,
+            last_seen   = NOW(),
+            updated_at  = NOW();
+        """
+        await db_connection.execute_many(query, rows)
+
+    async def get_summary_counts(self, guild_id: int) -> tuple[int, int]:
+        """Return (total_member_count, loa_count) in a single query."""
+        query = """
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE is_active = TRUE AND on_loa = TRUE) AS loa_count
+        FROM roster_members
+        WHERE guild_id = $1;
+        """
+        row = await db_connection.execute_single(query, guild_id)
+        if row:
+            return (row[0], row[1])
+        return (0, 0)
+
     async def remove_absent_members(self, guild_id: int, present_user_ids: list[int]) -> int:
         """Remove roster entries for users no longer in the guild with @Member.
 

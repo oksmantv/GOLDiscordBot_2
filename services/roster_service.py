@@ -142,7 +142,12 @@ async def scan_roster(guild: discord.Guild) -> dict:
     loa_user_ids = {loa["user_id"] for loa in active_loas}
 
     present_user_ids: list[int] = []
-    updated = 0
+    rows: list[tuple] = []
+    active_count = 0
+    reserve_count = 0
+
+    hellfish_role = guild.get_role(HELLFISH_ROLE_ID)
+    aac_role      = guild.get_role(AAC_ROLE_ID)
 
     for member in guild.members:
         if member.bot:
@@ -160,8 +165,6 @@ async def scan_roster(guild: discord.Guild) -> dict:
         # Determine subgroup — check regardless of active role because
         # LOA members lose @Active but keep their subgroup role (FH/AAC)
         subgroup: Optional[str] = None
-        hellfish_role = guild.get_role(HELLFISH_ROLE_ID)
-        aac_role      = guild.get_role(AAC_ROLE_ID)
         if hellfish_role and hellfish_role in member.roles:
             subgroup = "Flying Hellfish"
         elif aac_role and aac_role in member.roles:
@@ -173,33 +176,27 @@ async def scan_roster(guild: discord.Guild) -> dict:
         # roster (shown with strikethrough) even though they lose @Active
         effective_active = is_active or (on_loa and subgroup is not None)
 
-        await roster_repository.upsert_member(
-            guild_id=guild.id,
-            user_id=member.id,
-            nickname=clean_name,
-            rank_prefix=rank_prefix,
-            rank_name=rank_name,
-            rank_order=rank_order,
-            is_active=effective_active,
-            is_reserve=is_reserve,
-            subgroup=subgroup,
-            on_loa=on_loa,
-        )
-        updated += 1
+        if is_active:
+            active_count += 1
+        if is_reserve:
+            reserve_count += 1
+
+        rows.append((
+            guild.id, member.id, clean_name, rank_prefix, rank_name,
+            rank_order, effective_active, is_reserve, subgroup, on_loa,
+        ))
+
+    # Single bulk upsert instead of N individual round-trips
+    await roster_repository.bulk_upsert_members(rows)
 
     # Remove members who left the server or lost the @Member role
     removed = await roster_repository.remove_absent_members(guild.id, present_user_ids)
-
-    active_count  = sum(1 for uid in present_user_ids
-                        if active_role and active_role in guild.get_member(uid).roles)
-    reserve_count = sum(1 for uid in present_user_ids
-                        if reserve_role and reserve_role in guild.get_member(uid).roles)
 
     summary = {
         "total": len(present_user_ids),
         "active": active_count,
         "reserve": reserve_count,
-        "updated": updated,
+        "updated": len(rows),
         "removed": removed,
     }
     logger.info(f"Roster scan complete for {guild.name}: {summary}")
@@ -215,15 +212,20 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
     Reserve embed.  Splitting reserves into their own embed avoids
     field-length truncation on the main roster.
     """
+    import asyncio as _asyncio
     now_uk = datetime.now(UK_TZ)
 
-    active_members  = await roster_repository.get_active_members(guild_id)
-    reserve_members = await roster_repository.get_reserve_members(guild_id)
+    (active_members, reserve_members), (total_count, loa_count) = await _asyncio.gather(
+        _asyncio.gather(
+            roster_repository.get_active_members(guild_id),
+            roster_repository.get_reserve_members(guild_id),
+        ),
+        roster_repository.get_summary_counts(guild_id),
+    )
 
-    total_count   = await roster_repository.get_member_count(guild_id)
-    active_count  = await roster_repository.get_active_count(guild_id)
-    reserve_count = await roster_repository.get_reserve_count(guild_id)
-    loa_count     = await roster_repository.get_loa_count(guild_id)
+    # Derive counts from loaded data — no extra DB queries needed
+    active_count  = len(active_members)
+    reserve_count = len(reserve_members)
 
     # active_count includes LOA members; split for clarity
     active_available = active_count - loa_count

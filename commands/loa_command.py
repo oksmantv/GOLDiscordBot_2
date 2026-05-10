@@ -495,6 +495,7 @@ class LOACommands(commands.Cog):
     async def _loa_check_loop(self):
         """Hourly check: expire LOAs, manage roles, send DMs during UK daytime."""
         try:
+            from collections import defaultdict
             now_uk = datetime.now(UK_TZ)
             today = now_uk.date()
             is_notification_hours = 8 <= now_uk.hour <= 16
@@ -505,6 +506,15 @@ class LOACommands(commands.Cog):
 
                 active_loas = await loa_repository.get_active_loas_by_guild(guild_id)
                 logger.info(f"[LOA LOOP] Guild {guild.name}: {len(active_loas)} active LOAs, today={today}")
+
+                # Group by user_id so we can check remaining LOAs in memory
+                # instead of re-querying the DB per expired LOA.
+                loas_by_user: dict = defaultdict(list)
+                for loa in active_loas:
+                    loas_by_user[loa["user_id"]].append(loa)
+
+                to_expire_ids: set[int] = set()
+                to_notify_ids: list[int] = []
 
                 for loa_entry in active_loas:
                     try:
@@ -529,7 +539,7 @@ class LOACommands(commands.Cog):
                                 f"[LOA LOOP] Expiring LOA #{loa_entry['id']} "
                                 f"user={loa_entry['user_id']} end={end_date}"
                             )
-                            await loa_repository.mark_expired(loa_entry["id"])
+                            to_expire_ids.add(loa_entry["id"])
                             summary_needs_update = True
 
                             # Delete announcement embed
@@ -538,10 +548,12 @@ class LOACommands(commands.Cog):
                             except Exception as e:
                                 logger.warning(f"[LOA LOOP] Failed to delete announcement for LOA #{loa_entry['id']}: {e}")
 
-                            # Check for other active LOAs before restoring role
-                            remaining = await loa_repository.get_active_loas_by_user(
-                                guild_id, loa_entry["user_id"]
-                            )
+                            # In-memory check: remaining active LOAs for this user
+                            # (excluding any we've already decided to expire this run)
+                            remaining = [
+                                l for l in loas_by_user[loa_entry["user_id"]]
+                                if l["id"] not in to_expire_ids
+                            ]
                             still_on_leave = any(
                                 (l["start_date"].date() if hasattr(l["start_date"], 'date') else l["start_date"]) <= today
                                 for l in remaining
@@ -561,19 +573,24 @@ class LOACommands(commands.Cog):
                                     )
                                 except Exception as e:
                                     logger.warning(f"[LOA LOOP] Failed to send expiry DM for LOA #{loa_entry['id']}: {e}")
-                                await loa_repository.mark_notified(loa_entry["id"])
+                                to_notify_ids.append(loa_entry["id"])
                             else:
                                 # If user left the server, mark notified anyway
                                 try:
                                     await guild.fetch_member(loa_entry["user_id"])
                                 except (discord.NotFound, discord.HTTPException):
-                                    await loa_repository.mark_notified(loa_entry["id"])
+                                    to_notify_ids.append(loa_entry["id"])
                     except Exception as e:
                         logger.error(f"[LOA LOOP] Error processing LOA #{loa_entry.get('id', '?')}: {e}", exc_info=True)
+
+                # Bulk DB writes — replace N individual round-trips with 2 queries
+                await loa_repository.mark_expired_bulk(list(to_expire_ids))
+                await loa_repository.mark_notified_bulk(to_notify_ids)
 
                 # 3. Send pending DM notifications for previously expired LOAs
                 if is_notification_hours:
                     unnotified = await loa_repository.get_expired_unnotified(guild_id)
+                    unnotified_to_mark: list[int] = []
                     for loa_entry in unnotified:
                         try:
                             member = await guild.fetch_member(loa_entry["user_id"])
@@ -590,7 +607,8 @@ class LOACommands(commands.Cog):
                             )
                         except Exception as e:
                             logger.warning(f"[LOA LOOP] Failed to send expiry DM for unnotified LOA #{loa_entry['id']}: {e}")
-                        await loa_repository.mark_notified(loa_entry["id"])
+                        unnotified_to_mark.append(loa_entry["id"])
+                    await loa_repository.mark_notified_bulk(unnotified_to_mark)
 
                 # 4. Update summary if anything changed
                 if summary_needs_update:

@@ -1,7 +1,16 @@
+import time
 from .database_connection import db_connection
+
+_config_cache: dict[int, tuple[dict, float]] = {}
+_CONFIG_TTL = 300.0  # 5 minutes
+
 
 class ScheduleConfigRepository:
     """Repository for storing and retrieving schedule config (channel_id, message_id) per guild."""
+
+    def _invalidate(self, guild_id: int) -> None:
+        _config_cache.pop(guild_id, None)
+
     async def set_config(self, guild_id: int, channel_id: int, message_id: int, briefing_channel_id: int, log_channel_id: int = None):
         query = """
         INSERT INTO schedule_config (guild_id, channel_id, message_id, briefing_channel_id, log_channel_id)
@@ -9,6 +18,7 @@ class ScheduleConfigRepository:
         ON CONFLICT (guild_id) DO UPDATE SET channel_id = $2, message_id = $3, briefing_channel_id = $4, log_channel_id = $5;
         """
         await db_connection.execute_command(query, guild_id, channel_id, message_id, briefing_channel_id, log_channel_id)
+        self._invalidate(guild_id)
 
     async def update_log_channel(self, guild_id: int, log_channel_id: int):
         """Update only the log channel for an existing config."""
@@ -16,6 +26,7 @@ class ScheduleConfigRepository:
         UPDATE schedule_config SET log_channel_id = $2 WHERE guild_id = $1;
         """
         await db_connection.execute_command(query, guild_id, log_channel_id)
+        self._invalidate(guild_id)
 
     async def update_feedback_channel(self, guild_id: int, feedback_channel_id: int):
         """Update only the feedback channel for an existing config."""
@@ -23,6 +34,7 @@ class ScheduleConfigRepository:
         UPDATE schedule_config SET feedback_channel_id = $2 WHERE guild_id = $1;
         """
         await db_connection.execute_command(query, guild_id, feedback_channel_id)
+        self._invalidate(guild_id)
 
     async def update_events_channel(self, guild_id: int, events_channel_id: int):
         """Update only the events channel for an existing config."""
@@ -30,14 +42,22 @@ class ScheduleConfigRepository:
         UPDATE schedule_config SET events_channel_id = $2 WHERE guild_id = $1;
         """
         await db_connection.execute_command(query, guild_id, events_channel_id)
+        self._invalidate(guild_id)
 
     async def get_config(self, guild_id: int):
+        now = time.monotonic()
+        cached = _config_cache.get(guild_id)
+        if cached is not None:
+            val, ts = cached
+            if now - ts < _CONFIG_TTL:
+                return val
+
         query = """
         SELECT channel_id, message_id, briefing_channel_id, log_channel_id, feedback_channel_id, events_channel_id FROM schedule_config WHERE guild_id = $1;
         """
         result = await db_connection.execute_single(query, guild_id)
         if result:
-            return {
+            config = {
                 "channel_id": result[0],
                 "message_id": result[1],
                 "briefing_channel_id": result[2],
@@ -45,6 +65,8 @@ class ScheduleConfigRepository:
                 "feedback_channel_id": result[4],
                 "events_channel_id": result[5],
             }
+            _config_cache[guild_id] = (config, now)
+            return config
         return None
 
 schedule_config_repository = ScheduleConfigRepository()

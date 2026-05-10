@@ -19,6 +19,12 @@ async def build_schedule_embed(guild):
     config = await schedule_config_repository.get_config(guild.id)
     briefing_channel_id = config["briefing_channel_id"] if config else None
 
+    # Fetch all briefing forum threads ONCE before the event loop so we
+    # don't paginate the entire archive repeatedly for each named event.
+    all_forum_threads = []
+    if briefing_channel_id:
+        all_forum_threads = await _fetch_forum_threads(guild, briefing_channel_id, logger)
+
     # Build header
     editors = set()
     instructors = set()
@@ -105,15 +111,14 @@ async def build_schedule_embed(guild):
             day = ordinal(event.date.day)
             month_full = event.date.strftime('%B')
             weekday = event.date.weekday()
-            # Try to find a matching briefing post link with timeout
+            # Try to find a matching briefing post link (threads already fetched above)
             briefing_link = None
-            if briefing_channel_id and event.name:
+            if briefing_channel_id and event.name and all_forum_threads:
                 from services.schedule_embed_service import find_briefing_post_link
                 import asyncio
                 try:
-                    # Set a 5-second timeout for briefing link matching
                     briefing_link = await asyncio.wait_for(
-                        find_briefing_post_link(guild, briefing_channel_id, event.name, min_ratio=0.6),
+                        find_briefing_post_link(guild, briefing_channel_id, event.name, min_ratio=0.6, threads=all_forum_threads),
                         timeout=5.0
                     )
                     logger.info(f"[BRIEFING LINK] Event: '{event.name}' | Link: {briefing_link}")
@@ -158,7 +163,35 @@ async def build_schedule_embed(guild):
     embed.set_footer(text="")
     return embed
 
-async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_ratio=0.6):
+async def _fetch_forum_threads(guild, forum_channel_id, logger=None):
+    """Fetch all active and archived threads from a forum channel once.
+
+    Returns a flat list of Thread objects.  Callers can re-use this list
+    for multiple lookups instead of hitting the Discord API per event.
+    """
+    import logging as _logging
+    if logger is None:
+        logger = _logging.getLogger("schedule_embed_service")
+
+    forum_channel = guild.get_channel(forum_channel_id)
+    if not forum_channel or forum_channel.type != discord.ChannelType.forum:
+        logger.warning(f"Forum channel {forum_channel_id} not found or not a forum channel")
+        return []
+
+    threads = []
+    if hasattr(forum_channel, 'threads'):
+        threads.extend(forum_channel.threads or [])
+    try:
+        async for thread in forum_channel.archived_threads(limit=None):
+            threads.append(thread)
+    except Exception as e:
+        logger.warning(f"Error fetching archived threads: {e}")
+
+    logger.info(f"Fetched {len(threads)} forum threads for briefing link matching")
+    return threads
+
+
+async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_ratio=0.6, threads=None):
     """
     Search for a forum post (thread) in the given forum_channel_id whose title matches mission_name.
     Uses aggressive matching strategies to maximize success rate.
@@ -167,35 +200,22 @@ async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_rat
     import logging
     import re
     logger = logging.getLogger("briefing_link_matcher")
-    
-    forum_channel = guild.get_channel(forum_channel_id)
-    if not forum_channel or forum_channel.type != discord.ChannelType.forum:
-        logger.warning(f"Forum channel {forum_channel_id} not found or not a forum channel")
+
+    # Use pre-fetched threads when available; fall back to fetching on demand.
+    if threads is None:
+        threads = await _fetch_forum_threads(guild, forum_channel_id, logger)
+        if not threads:
+            return None
+    elif not threads:
         return None
-    
-    logger.info(f"Searching for briefing link for mission: '{mission_name}' in forum: {forum_channel.name}")
-    
-    # Fetch all threads (posts) in the forum - improved approach
-    threads = []
-    
-    # Method 1: Get threads from forum_channel.threads (active threads)
-    if hasattr(forum_channel, 'threads'):
-        threads.extend(forum_channel.threads or [])
-        logger.info(f"Found {len(threads)} active threads")
-    
-    # Method 2: Fetch archived threads
-    try:
-        async for thread in forum_channel.archived_threads(limit=None):
-            threads.append(thread)
-    except Exception as e:
-        logger.warning(f"Error fetching archived threads: {e}")
-    
-    logger.info(f"Total threads found: {len(threads)}")
-    
+
+    forum_channel = guild.get_channel(forum_channel_id)
+    logger.info(f"Searching for briefing link for mission: '{mission_name}' (threads={len(threads)})")
+
     if not threads:
         logger.warning("No threads found in forum channel")
         return None
-    
+
     # Normalize mission name for better matching
     def normalize_text(text):
         """Normalize text for matching while preserving key distinguishing words"""
@@ -208,7 +228,7 @@ async def find_briefing_post_link(guild, forum_channel_id, mission_name, min_rat
         text = re.sub(r'[^\w\s]', ' ', text)
         text = re.sub(r'\s+', ' ', text)
         return text.strip()
-    
+
     def extract_keywords(text):
         """Extract meaningful keywords from text, preserving important distinguishing words"""
         normalized = normalize_text(text)

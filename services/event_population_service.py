@@ -79,27 +79,7 @@ class EventPopulationService:
             if start_date <= event.date <= end_date
         ]
 
-        created_count = 0
-        skipped_count = 0
-        failed_count = 0
-        for event in filtered_events:
-            try:
-                created, event_id = await event_repository.create_event(event)
-                if created:
-                    created_count += 1
-                else:
-                    skipped_count += 1
-            except Exception as e:
-                if "duplicate key" in str(e).lower():
-                    skipped_count += 1
-                else:
-                    failed_count += 1
-        return {
-            "created": created_count,
-            "skipped": skipped_count,
-            "failed": failed_count,
-            "total": len(filtered_events)
-        }
+        return await event_repository.bulk_create_events(filtered_events)
     
     async def populate_8_week_range(self, center_date: date = None) -> dict:
         """Populate events for 8-week range (4 weeks before and after center date). Returns a summary dict."""
