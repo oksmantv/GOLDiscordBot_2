@@ -43,7 +43,7 @@ _AUTO_POLL_OPTIONS = 5
 _AUTO_POLL_COMPOSITION = "All"
 _AUTO_POLL_EXCLUSION_WEEKS = 8
 _AUTO_POLL_HOUR = 21
-_AUTO_POLL_MINUTE = 30
+_AUTO_POLL_MINUTE = 0
 
 # Raid-Helper posting times (Swedish time) + 5-minute delay for the init update:
 #   Sunday  20:55 → posts Thursday event  → bot fires Sunday  21:00
@@ -785,7 +785,7 @@ class MissionPollCommands(commands.Cog):
     async def _auto_poll_loop(self):
         """Check if it's time to create an automatic mission poll.
 
-        Fires at 21:30 Swedish time on Thursdays (for Sunday) and
+        Fires at 21:00 Swedish time on Thursdays (for Sunday) and
         Sundays (for the coming Thursday).
         """
         try:

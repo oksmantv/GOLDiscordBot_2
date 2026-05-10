@@ -145,7 +145,7 @@ The bot will automatically create database tables, load all cogs, sync slash com
 - **Raid Helper init-update** — fires once per event right after Raid Helper posts a new event embed, pushing a structured placeholder description:
   - Sunday 21:00 Swedish time → Thursday event (posted at 20:55)
   - Thursday 21:05 Swedish time → Sunday event (posted at 21:00)
-- **Auto mission poll** — fires at 21:30 Swedish time on Thursdays (for Sunday) and Sundays (for Thursday); auto-creates a poll or schedules directly if only one mission matches
+- **Auto mission poll** — fires at 21:00 Swedish time on Thursdays (for Sunday) and Sundays (for Thursday); auto-creates a poll or schedules directly if only one mission matches
 - **Mission poll monitor** — every minute, processes ended polls and auto-schedules winners; updates Raid Helper event with full briefing content. If auto-completion fails (e.g. transient API error), use `/completepoll` to retry manually
 - **LOA expiry check** — on startup + hourly loop, auto-removes expired LOAs, restores `@Active` role, and sends DMs
 - **Roster refresh** — hourly, re-scans guild members and updates the roster embeds
