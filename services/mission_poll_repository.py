@@ -115,6 +115,40 @@ class MissionPollRepository:
         await db_connection.execute_command(query, poll_id)
         logger.warning(f"Poll #{poll_id} marked as failed")
 
+    async def get_poll_by_id(self, poll_id: int) -> Optional[dict]:
+        """Fetch a single poll by its ID regardless of status."""
+        query = """
+        SELECT id, guild_id, poll_message_id, channel_id, target_event_id,
+               framework_filter, composition_filter, mission_thread_ids,
+               poll_end_time, status, winning_thread_id, created_by, created_at,
+               links_message_id
+        FROM mission_polls WHERE id = $1;
+        """
+        result = await db_connection.execute_single(query, poll_id)
+        return self._row_to_dict(result) if result else None
+
+    async def get_completable_polls(self, guild_id: int) -> list[dict]:
+        """Get active and failed polls for a guild (used by /completepoll autocomplete)."""
+        query = """
+        SELECT id, guild_id, poll_message_id, channel_id, target_event_id,
+               framework_filter, composition_filter, mission_thread_ids,
+               poll_end_time, status, winning_thread_id, created_by, created_at,
+               links_message_id
+        FROM mission_polls
+        WHERE guild_id = $1 AND status IN ('active', 'failed')
+        ORDER BY poll_end_time DESC;
+        """
+        results = await db_connection.execute_query(query, guild_id)
+        return [self._row_to_dict(row) for row in results]
+
+    async def reset_to_active(self, poll_id: int):
+        """Reset a failed poll back to active so the monitor can retry it."""
+        query = """
+        UPDATE mission_polls SET status = 'active' WHERE id = $1;
+        """
+        await db_connection.execute_command(query, poll_id)
+        logger.info(f"Poll #{poll_id} reset to active")
+
     def _row_to_dict(self, row) -> dict:
         """Convert a database row to a dictionary."""
         if not row:

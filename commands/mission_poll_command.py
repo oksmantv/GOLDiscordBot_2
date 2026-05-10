@@ -1202,6 +1202,139 @@ class MissionPollCommands(commands.Cog):
                 )
 
 
+    # ─── /completepoll — manual backup command ────────────────────────
+    @app_commands.guilds(Config.GUILD_ID)
+    @app_commands.command(
+        name="completepoll",
+        description="Manually complete a poll — use when auto-completion failed or got stuck",
+    )
+    @app_commands.describe(poll="Select the active or failed poll to process")
+    async def completepoll_command(
+        self,
+        interaction: discord.Interaction,
+        poll: str,
+    ):
+        """Manually trigger poll completion for active or failed polls."""
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message(
+                "❌ This command can only be used in a server.", ephemeral=True
+            )
+            return
+
+        # Permission check: admin or @Editor
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            member = await guild.fetch_member(interaction.user.id)
+        is_admin = any(getattr(r.permissions, "administrator", False) for r in member.roles)
+        has_editor = any(r.name.strip().lower() == "editor" for r in member.roles)
+        if not (is_admin or has_editor):
+            await interaction.response.send_message(
+                "❌ You must be an admin or have the @Editor role to use this command.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        # Resolve poll ID
+        try:
+            poll_id = int(poll)
+        except ValueError:
+            await interaction.followup.send("❌ Invalid poll selection.", ephemeral=True)
+            return
+
+        poll_data = await mission_poll_repository.get_poll_by_id(poll_id)
+        if not poll_data:
+            await interaction.followup.send(
+                "❌ Poll not found.", ephemeral=True
+            )
+            return
+
+        if poll_data["guild_id"] != guild.id:
+            await interaction.followup.send(
+                "❌ That poll does not belong to this server.", ephemeral=True
+            )
+            return
+
+        if poll_data["status"] == "completed":
+            target_event = await event_repository.get_event_by_id(poll_data["target_event_id"])
+            event_label = format_event_date(target_event.date) if target_event else f"event #{poll_data['target_event_id']}"
+            await interaction.followup.send(
+                f"ℹ️ Poll #{poll_id} for **{event_label}** is already completed.",
+                ephemeral=True,
+            )
+            return
+
+        # Reset failed polls to active so _process_ended_poll can write a clean result
+        if poll_data["status"] == "failed":
+            await mission_poll_repository.reset_to_active(poll_id)
+            poll_data = await mission_poll_repository.get_poll_by_id(poll_id)
+
+        target_event = await event_repository.get_event_by_id(poll_data["target_event_id"])
+        event_label = (
+            format_event_date(target_event.date)
+            if target_event
+            else f"event #{poll_data['target_event_id']}"
+        )
+
+        await interaction.followup.send(
+            f"⏳ Manually processing poll #{poll_id} for **{event_label}**…",
+            ephemeral=True,
+        )
+
+        logger.info(
+            "Manual /completepoll triggered by %s for poll #%d (%s)",
+            interaction.user, poll_id, event_label,
+        )
+
+        await self._process_ended_poll(poll_data)
+
+        # Report result based on refreshed DB status
+        refreshed = await mission_poll_repository.get_poll_by_id(poll_id)
+        if refreshed and refreshed["status"] == "completed":
+            await interaction.followup.send(
+                f"✅ Poll #{poll_id} for **{event_label}** has been completed successfully.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                f"❌ Poll #{poll_id} for **{event_label}** could not be completed — "
+                f"check the log channel for details.",
+                ephemeral=True,
+            )
+
+    @completepoll_command.autocomplete("poll")
+    async def completepoll_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        try:
+            guild = interaction.guild
+            if not guild:
+                return []
+
+            polls = await mission_poll_repository.get_completable_polls(guild_id=guild.id)
+            choices = []
+            for p in polls:
+                target_event = await event_repository.get_event_by_id(p["target_event_id"])
+                event_label = (
+                    format_event_date(target_event.date)
+                    if target_event
+                    else f"Event #{p['target_event_id']}"
+                )
+                fw = abbreviate_framework(p.get("framework_filter", ""))
+                status_tag = "⚠️ failed" if p["status"] == "failed" else "🟢 active"
+                label = f"Poll #{p['id']} — {event_label} [{fw}] ({status_tag})"
+
+                if current.lower() in label.lower() or not current:
+                    choices.append(app_commands.Choice(name=label, value=str(p["id"])))
+
+            return choices[:25]
+        except Exception as e:
+            logger.error(f"Completepoll autocomplete error: {e}")
+            return []
+
+
 async def setup(bot):
     """Setup function to add the cog."""
     await bot.add_cog(MissionPollCommands(bot))
