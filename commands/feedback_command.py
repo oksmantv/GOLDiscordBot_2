@@ -335,6 +335,48 @@ class FeedbackCommands(commands.Cog):
                 break
 
         if not mission_event:
+            # On Thursdays, if training is scheduled but mission isn't yet,
+            # allow updating the Raid-Helper event with training info and TBA for mission.
+            if target_date.weekday() == 3:
+                from services.event_repository import event_repository as ev_repo
+                training_event_only = await ev_repo.get_event_by_guild_date_type(
+                    guild.id, target_date, "Training"
+                )
+                if (
+                    training_event_only
+                    and training_event_only.name
+                    and training_event_only.name.strip()
+                    and training_event_only.name.strip().upper() != "EVENT CANCELLED"
+                ):
+                    event_id = await raid_helper_service.find_event_id_by_date(guild.id, target_date)
+                    if not event_id:
+                        await interaction.followup.send(
+                            f"❌ No Raid-Helper event found for {target_date.strftime('%A %d-%m-%Y')}.",
+                            ephemeral=True,
+                        )
+                        return
+                    description = raid_helper_service.build_event_description(
+                        "",
+                        is_thursday=True,
+                        training_name=training_event_only.name or "",
+                        instructor_name=training_event_only.creator_name or "",
+                    )
+                    success = await raid_helper_service.update_event(
+                        event_id, description=description, image=""
+                    )
+                    if success:
+                        await interaction.followup.send(
+                            f"✅ Updated Raid-Helper event for **{target_date.strftime('%A %d-%m-%Y')}** "
+                            f"with training info. Mission is **TBA** — run `/updateevent` again once a mission is scheduled.",
+                            ephemeral=True,
+                        )
+                    else:
+                        await interaction.followup.send(
+                            f"❌ Failed to update Raid-Helper event for {target_date.strftime('%A %d-%m-%Y')}.",
+                            ephemeral=True,
+                        )
+                    return
+
             await interaction.followup.send(
                 f"❌ No mission scheduled for {target_date.strftime('%A %d-%m-%Y')}. "
                 "Schedule a mission first or wait for the poll to complete.",

@@ -426,8 +426,10 @@ class RaidHelperService:
             logger.info(msg)
             return msg
 
-        # Extract image from the starter message we already fetched
-        image_url = self.extract_image_from_message(starter)
+        # Extract image from the starter message we already fetched.
+        # Fall back to "" (empty string) to clear any previously set image when
+        # none is found in the briefing, restoring the Raid-Helper default.
+        image_url = self.extract_image_from_message(starter) or ""
 
         # PATCH the event
         success = await self.update_event(
