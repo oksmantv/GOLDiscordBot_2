@@ -7,7 +7,7 @@ from typing import Optional
 from .forum_tag_service import forum_tag_service, FRAMEWORK_TAG_PATTERN
 from .mission_poll_repository import mission_poll_repository
 from .event_repository import event_repository
-from .schedule_config_repository import schedule_config_repository
+from .log_channel_service import get_log_channel as shared_get_log_channel
 
 logger = logging.getLogger(__name__)
 
@@ -318,9 +318,4 @@ async def send_dm_safe(user: discord.User, content: str = None, embed: discord.E
 
 async def get_log_channel(guild: discord.Guild) -> Optional[discord.TextChannel]:
     """Get the configured log channel for the guild."""
-    config = await schedule_config_repository.get_config(guild.id)
-    if config and config.get("log_channel_id"):
-        channel = guild.get_channel(config["log_channel_id"])
-        if channel:
-            return channel
-    return None
+    return await shared_get_log_channel(guild)

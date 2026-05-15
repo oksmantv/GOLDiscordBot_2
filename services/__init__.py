@@ -11,6 +11,7 @@ from .roster_repository import roster_repository
 from .roster_config_repository import roster_config_repository
 from .feedback_repository import feedback_repository
 from .raid_helper_service import raid_helper_service
+from .log_channel_service import get_log_channel, report_failure
 
 __all__ = [
     'db_connection',
@@ -26,4 +27,6 @@ __all__ = [
     'roster_config_repository',
     'feedback_repository',
     'raid_helper_service',
+    'get_log_channel',
+    'report_failure',
 ]

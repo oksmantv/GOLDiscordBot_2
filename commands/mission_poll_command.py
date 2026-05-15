@@ -30,6 +30,7 @@ from services.mission_poll_service import (
 from services.schedule_config_repository import schedule_config_repository
 from services.event_repository import event_repository
 from services.raid_helper_service import raid_helper_service
+from services.log_channel_service import report_failure
 
 logger = logging.getLogger(__name__)
 
@@ -812,6 +813,15 @@ class MissionPollCommands(commands.Cog):
 
         except Exception as e:
             logger.error(f"Auto-poll loop error: {e}", exc_info=True)
+            for guild in self.bot.guilds:
+                if guild.id == Config.GUILD_ID:
+                    await report_failure(
+                        guild,
+                        "Auto Poll Loop",
+                        "Background auto-poll scheduler crashed.",
+                        e,
+                    )
+                    break
 
     @_auto_poll_loop.before_loop
     async def _before_auto_poll_loop(self):
@@ -852,6 +862,15 @@ class MissionPollCommands(commands.Cog):
 
         except Exception as e:
             logger.error("RH init-update loop error: %s", e, exc_info=True)
+            for guild in self.bot.guilds:
+                if guild.id == Config.GUILD_ID:
+                    await report_failure(
+                        guild,
+                        "RH Init Update Loop",
+                        "Raid-Helper post-creation update loop crashed.",
+                        e,
+                    )
+                    break
 
     @_rh_init_update_loop.before_loop
     async def _before_rh_init_update_loop(self):
@@ -900,6 +919,11 @@ class MissionPollCommands(commands.Cog):
                 "— event may not have been posted yet",
                 target_date,
             )
+            await report_failure(
+                guild,
+                "RH Init Update",
+                f"No Raid-Helper event found for target date {target_date}.",
+            )
             return
 
         success = await raid_helper_service.update_event(event_id, description=description)
@@ -912,6 +936,11 @@ class MissionPollCommands(commands.Cog):
             logger.warning(
                 "RH init-update: failed to update Raid-Helper event for %s",
                 target_date,
+            )
+            await report_failure(
+                guild,
+                "RH Init Update",
+                f"Failed to update Raid-Helper event for {target_date}.",
             )
 
     async def _try_auto_poll(self, guild: discord.Guild, target_date: date):
@@ -1187,6 +1216,15 @@ class MissionPollCommands(commands.Cog):
 
         except Exception as e:
             logger.error(f"Poll monitor loop error: {e}")
+            for guild in self.bot.guilds:
+                if guild.id == Config.GUILD_ID:
+                    await report_failure(
+                        guild,
+                        "Poll Monitor Loop",
+                        "Mission poll monitor loop crashed.",
+                        e,
+                    )
+                    break
 
     @_poll_monitor_loop.before_loop
     async def _before_poll_monitor(self):

@@ -4,6 +4,7 @@ import asyncio
 import logging
 from config import Config
 from services import db_connection, initialize_database, event_population_service
+from services.log_channel_service import report_failure
 
 # Configure logging
 logging.basicConfig(
@@ -43,6 +44,15 @@ class GOLBot(commands.Bot):
                 await self.update_schedule_message_on_startup()
         except Exception as e:
             logger.warning(f"Event maintenance loop failed: {e}")
+            for guild in self.guilds:
+                if guild.id == Config.GUILD_ID:
+                    await report_failure(
+                        guild,
+                        "Event Maintenance Loop",
+                        "Event maintenance background loop failed.",
+                        e,
+                    )
+                    break
 
     @_event_population_maintenance_loop.before_loop
     async def _before_event_population_maintenance_loop(self):
@@ -116,6 +126,15 @@ class GOLBot(commands.Bot):
 
         except Exception as e:
             logger.error(f"Error during setup: {e}")
+            for guild in self.guilds:
+                if guild.id == Config.GUILD_ID:
+                    await report_failure(
+                        guild,
+                        "Bot Setup",
+                        "Bot setup_hook failed.",
+                        e,
+                    )
+                    break
             raise
 
     async def update_schedule_message_on_startup(self):
@@ -287,7 +306,17 @@ class GOLBot(commands.Bot):
 
     async def on_app_command_error(self, interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
         """Handle application command errors."""
-        logger.error(f'App command error: {error}')
+        logger.error(f'App command error: {error}', exc_info=True)
+
+        command_name = "unknown"
+        if interaction.command is not None and getattr(interaction.command, "name", None):
+            command_name = interaction.command.name
+        await report_failure(
+            interaction.guild,
+            f"Command /{command_name}",
+            "Unhandled slash command exception.",
+            error,
+        )
 
         if not interaction.response.is_done():
             await interaction.response.send_message(

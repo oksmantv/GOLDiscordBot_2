@@ -10,6 +10,7 @@ from services.roster_service import (
     build_roster_embeds,
     update_roster_message,
 )
+from services.log_channel_service import report_failure
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,15 @@ class RosterCommands(commands.Cog):
 
         except Exception as e:
             logger.error(f"Roster refresh loop error: {e}", exc_info=True)
+            for guild in self.bot.guilds:
+                if guild.id == Config.GUILD_ID:
+                    await report_failure(
+                        guild,
+                        "Roster Loop",
+                        "Hourly roster refresh loop crashed.",
+                        e,
+                    )
+                    break
 
     @_roster_refresh_loop.before_loop
     async def _before_roster_refresh(self):

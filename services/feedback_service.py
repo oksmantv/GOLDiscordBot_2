@@ -9,6 +9,7 @@ from .event_repository import event_repository
 from .feedback_repository import feedback_repository
 from .raid_helper_service import raid_helper_service
 from .schedule_config_repository import schedule_config_repository
+from .log_channel_service import report_failure
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -220,6 +221,11 @@ async def create_feedback_thread(
     config = await schedule_config_repository.get_config(guild.id)
     if not config or not config.get("feedback_channel_id"):
         logger.warning("[Feedback] ABORT: No feedback_channel_id in schedule_config — run /configurefeedback")
+        await report_failure(
+            guild,
+            "Feedback Thread",
+            f"Abort for {event_date}: no feedback_channel_id configured.",
+        )
         return None
 
     feedback_channel_id = config["feedback_channel_id"]
@@ -231,11 +237,21 @@ async def create_feedback_thread(
             f"[Feedback] ABORT: Channel {feedback_channel_id} not found in guild cache. "
             "The bot may lack channel visibility or the ID is wrong."
         )
+        await report_failure(
+            guild,
+            "Feedback Thread",
+            f"Abort for {event_date}: configured feedback channel {feedback_channel_id} not found.",
+        )
         return None
     if forum_channel.type != discord.ChannelType.forum:
         logger.warning(
             f"[Feedback] ABORT: Channel '{forum_channel.name}' ({feedback_channel_id}) "
             f"has type {forum_channel.type!r} — must be a Forum channel, not a text/announcement channel."
+        )
+        await report_failure(
+            guild,
+            "Feedback Thread",
+            f"Abort for {event_date}: channel {feedback_channel_id} is not a forum channel.",
         )
         return None
 
@@ -262,6 +278,11 @@ async def create_feedback_thread(
                 logger.warning(
                     f"No events found in DB for {event_date}, skipping feedback thread. "
                     "Use force=True or populate the schedule first."
+                )
+                await report_failure(
+                    guild,
+                    "Feedback Thread",
+                    f"Abort for {event_date}: no events found in DB.",
                 )
             return None
         # force=True: create with a generic title since no valid events were found
@@ -320,6 +341,12 @@ async def create_feedback_thread(
         logger.error(
             f"Failed to create feedback thread for {event_date}: {e}",
             exc_info=True,
+        )
+        await report_failure(
+            guild,
+            "Feedback Thread",
+            f"Create thread failed for {event_date}.",
+            e,
         )
         return None
 

@@ -6,6 +6,7 @@ import logging
 
 from .loa_repository import loa_repository
 from .loa_config_repository import loa_config_repository
+from .log_channel_service import report_failure
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,12 @@ async def find_next_raidhelper_event(
                 return msg.jump_url, events_channel
     except Exception as e:
         logger.warning(f"Failed to search events channel for Raid-Helper posts: {e}")
+        await report_failure(
+            guild,
+            "LOA Service",
+            "Failed to search events channel for Raid-Helper posts.",
+            e,
+        )
 
     return None, events_channel
 
@@ -217,6 +224,12 @@ async def remove_active_role(guild: discord.Guild, user_id: int) -> bool:
             return True
         except discord.HTTPException as e:
             logger.warning(f"Failed to remove @Active role from {user_id}: {e}")
+            await report_failure(
+                guild,
+                "LOA Service",
+                f"Failed to remove @Active role from user {user_id}.",
+                e,
+            )
 
     return False
 
@@ -243,6 +256,12 @@ async def restore_active_role(guild: discord.Guild, user_id: int) -> bool:
             return True
         except discord.HTTPException as e:
             logger.warning(f"Failed to restore @Active role to {user_id}: {e}")
+            await report_failure(
+                guild,
+                "LOA Service",
+                f"Failed to restore @Active role for user {user_id}.",
+                e,
+            )
 
     return False
 
@@ -275,6 +294,12 @@ async def update_summary_message(bot: discord.Client, guild_id: int) -> None:
         await loa_config_repository.set_config(guild_id, config["channel_id"], msg.id)
     except Exception as e:
         logger.error(f"Failed to update LOA summary message: {e}")
+        await report_failure(
+            guild,
+            "LOA Service",
+            "Failed to update LOA summary message.",
+            e,
+        )
 
 
 # ── DM Sender ──────────────────────────────────────────────────────────
@@ -307,6 +332,12 @@ async def send_expiry_dm(guild: discord.Guild, loa: dict, role_restored: bool) -
         return True
     except discord.HTTPException as e:
         logger.warning(f"Failed to DM user {loa['user_id']} about LOA expiry: {e}")
+        await report_failure(
+            guild,
+            "LOA Service",
+            f"Failed to DM LOA expiry notice to user {loa['user_id']}.",
+            e,
+        )
         return False
 
 

@@ -7,6 +7,7 @@ import logging
 
 from .roster_repository import roster_repository
 from .roster_config_repository import roster_config_repository
+from .log_channel_service import report_failure
 from .loa_repository import loa_repository
 
 logger = logging.getLogger(__name__)
@@ -411,3 +412,9 @@ async def update_roster_message(bot: discord.Client, guild_id: int) -> None:
         await roster_config_repository.set_config(guild_id, config["channel_id"], msg.id)
     except Exception as e:
         logger.error(f"Failed to update Roster embed message: {e}")
+        await report_failure(
+            guild,
+            "Roster Service",
+            "Failed to update roster embed message.",
+            e,
+        )

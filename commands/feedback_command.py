@@ -11,6 +11,7 @@ from services.feedback_service import (
     is_event_day,
 )
 from services.feedback_repository import feedback_repository
+from services.log_channel_service import report_failure
 from services.schedule_config_repository import schedule_config_repository
 from services.raid_helper_service import raid_helper_service
 from services.schedule_embed_service import find_briefing_post_link
@@ -54,6 +55,15 @@ class FeedbackCommands(commands.Cog):
                     )
         except Exception as e:
             logger.error(f"Feedback loop error: {e}", exc_info=True)
+            for guild in self.bot.guilds:
+                if guild.id == Config.GUILD_ID:
+                    await report_failure(
+                        guild,
+                        "Feedback Loop",
+                        "Background feedback check failed.",
+                        e,
+                    )
+                    break
 
     @_feedback_loop.before_loop
     async def _before_feedback_loop(self):

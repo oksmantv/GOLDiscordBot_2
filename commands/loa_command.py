@@ -21,6 +21,7 @@ from services.loa_service import (
     send_expiry_dm,
     delete_loa_announcement,
 )
+from services.log_channel_service import report_failure
 
 logger = logging.getLogger(__name__)
 
@@ -547,6 +548,12 @@ class LOACommands(commands.Cog):
                                 await delete_loa_announcement(guild, loa_entry)
                             except Exception as e:
                                 logger.warning(f"[LOA LOOP] Failed to delete announcement for LOA #{loa_entry['id']}: {e}")
+                                await report_failure(
+                                    guild,
+                                    "LOA Loop",
+                                    f"Failed to delete announcement for LOA #{loa_entry['id']}.",
+                                    e,
+                                )
 
                             # In-memory check: remaining active LOAs for this user
                             # (excluding any we've already decided to expire this run)
@@ -573,6 +580,12 @@ class LOACommands(commands.Cog):
                                     )
                                 except Exception as e:
                                     logger.warning(f"[LOA LOOP] Failed to send expiry DM for LOA #{loa_entry['id']}: {e}")
+                                    await report_failure(
+                                        guild,
+                                        "LOA Loop",
+                                        f"Failed to send expiry DM for LOA #{loa_entry['id']}.",
+                                        e,
+                                    )
                                 to_notify_ids.append(loa_entry["id"])
                             else:
                                 # If user left the server, mark notified anyway
@@ -582,6 +595,12 @@ class LOACommands(commands.Cog):
                                     to_notify_ids.append(loa_entry["id"])
                     except Exception as e:
                         logger.error(f"[LOA LOOP] Error processing LOA #{loa_entry.get('id', '?')}: {e}", exc_info=True)
+                        await report_failure(
+                            guild,
+                            "LOA Loop",
+                            f"Error while processing LOA #{loa_entry.get('id', '?')}.",
+                            e,
+                        )
 
                 # Bulk DB writes — replace N individual round-trips with 2 queries
                 await loa_repository.mark_expired_bulk(list(to_expire_ids))
@@ -607,6 +626,12 @@ class LOACommands(commands.Cog):
                             )
                         except Exception as e:
                             logger.warning(f"[LOA LOOP] Failed to send expiry DM for unnotified LOA #{loa_entry['id']}: {e}")
+                            await report_failure(
+                                guild,
+                                "LOA Loop",
+                                f"Failed to send expiry DM for unnotified LOA #{loa_entry['id']}.",
+                                e,
+                            )
                         unnotified_to_mark.append(loa_entry["id"])
                     await loa_repository.mark_notified_bulk(unnotified_to_mark)
 
@@ -616,6 +641,15 @@ class LOACommands(commands.Cog):
 
         except Exception as e:
             logger.error(f"LOA check loop error: {e}", exc_info=True)
+            for guild in self.bot.guilds:
+                if guild.id == Config.GUILD_ID:
+                    await report_failure(
+                        guild,
+                        "LOA Loop",
+                        "Hourly LOA check loop crashed.",
+                        e,
+                    )
+                    break
 
     @_loa_check_loop.before_loop
     async def _before_loa_check_loop(self):
