@@ -1,5 +1,6 @@
 import discord
 import logging
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -57,6 +58,64 @@ def get_event_end_uk(d: date) -> Optional[datetime]:
     return datetime.combine(d, sched["end"], tzinfo=UK_TZ)
 
 
+# ── Thread title length limit ─────────────────────────────────────────
+_TITLE_MAX_LEN = 100
+
+# Abbreviations applied (in order) when a title exceeds _TITLE_MAX_LEN.
+# Longer / more-specific entries come first to avoid partial replacements.
+_ABBREVIATIONS: list[tuple[str, str]] = [
+    ("Special Forces",   "SF"),
+    ("Headquarters",     "HQ"),
+    ("Reconnaissance",   "Recon"),
+    ("Communications",   "Comms"),
+    ("Intelligence",     "Intel"),
+    ("Continuation",     "Cont."),
+    ("Introduction",     "Intro"),
+    ("Mechanised",       "Mech"),
+    ("Mechanized",       "Mech"),
+    ("Armoured",         "Armd"),
+    ("Armored",          "Armd"),
+    ("Operations",       "Ops"),
+    ("Operation",        "Op"),
+    ("Airborne",         "Abn"),
+    ("Battalion",        "Btn"),
+    ("Squadron",         "Sqn"),
+    ("Infantry",         "Inf"),
+    ("Platoon",          "Plt"),
+    ("Company",          "Coy"),
+    ("Advanced",         "Adv."),
+    ("Rotation",         "Rot."),
+]
+
+
+def shorten_title(title: str) -> str:
+    """Ensure a forum thread title fits within Discord's 100-character limit.
+
+    Applies standard military/gaming abbreviations progressively until the
+    title fits.  Only truncates as an absolute last resort to avoid cutting
+    mid-word.
+    """
+    if len(title) <= _TITLE_MAX_LEN:
+        return title
+
+    result = title
+    for full, short in _ABBREVIATIONS:
+        if len(result) <= _TITLE_MAX_LEN:
+            break
+        result = re.sub(rf"\b{re.escape(full)}\b", short, result, flags=re.IGNORECASE)
+
+    if len(result) > _TITLE_MAX_LEN:
+        logger.warning(
+            f"[Feedback] Title still too long after abbreviations ({len(result)} chars), "
+            f"truncating: '{result}'"
+        )
+        # Truncate at the last space before the limit to avoid mid-word cuts
+        truncated = result[:_TITLE_MAX_LEN - 1].rsplit(" ", 1)[0]
+        result = truncated + "\u2026"  # horizontal ellipsis
+
+    return result
+
+
 def build_thread_title(event_date: date, events: list) -> str:
     """Build the feedback thread title from the date and event names.
 
@@ -76,7 +135,7 @@ def build_thread_title(event_date: date, events: list) -> str:
 
         parts = [p for p in [training_name, mission_name] if p]
         if parts:
-            return f"{date_str}: {' + '.join(parts)}"
+            return shorten_title(f"{date_str}: {' + '.join(parts)}")
         return f"{date_str}: Thursday Event"
 
     else:  # Sunday
@@ -85,7 +144,7 @@ def build_thread_title(event_date: date, events: list) -> str:
             if ev.type == "Mission" and ev.name.strip():
                 mission_name = ev.name.strip()
         if mission_name:
-            return f"{date_str}: {mission_name}"
+            return shorten_title(f"{date_str}: {mission_name}")
         return f"{date_str}: Sunday Event"
 
 
