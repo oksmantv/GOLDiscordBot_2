@@ -10,6 +10,7 @@ from services.feedback_service import (
     create_feedback_thread,
     is_event_day,
 )
+from services.feedback_repository import feedback_repository
 from services.schedule_config_repository import schedule_config_repository
 from services.raid_helper_service import raid_helper_service
 from services.schedule_embed_service import find_briefing_post_link
@@ -140,12 +141,32 @@ class FeedbackCommands(commands.Cog):
                 f"✅ Feedback thread created: {thread.mention}",
                 ephemeral=True,
             )
-        else:
+        elif force:
+            # force was already set — never tell the user to use force again
             await interaction.followup.send(
-                f"⚠️ A feedback post already exists for {target_date.strftime('%d-%m-%Y')}. "
-                "Use `force: True` to re-create it.",
+                f"❌ Failed to create feedback thread for {target_date.strftime('%d-%m-%Y')} "
+                "even with `force: True`. Check the bot logs for the specific error "
+                "(channel misconfigured, wrong channel type, Discord API error, etc.).",
                 ephemeral=True,
             )
+        else:
+            # Determine whether it was a duplicate or a real failure
+            already_exists = await feedback_repository.has_feedback_for_date(
+                guild.id, target_date
+            )
+            if already_exists:
+                await interaction.followup.send(
+                    f"⚠️ A feedback post already exists for {target_date.strftime('%d-%m-%Y')}. "
+                    "Use `force: True` to re-create it.",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(
+                    f"❌ Failed to create feedback thread for {target_date.strftime('%d-%m-%Y')}. "
+                    "Check the bot logs — look for `[Feedback] ABORT` or `[Feedback] Failed` lines "
+                    "to see the exact reason.",
+                    ephemeral=True,
+                )
 
     @feedback_command.autocomplete("event_date")
     async def event_date_autocomplete(

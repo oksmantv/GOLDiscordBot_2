@@ -146,45 +146,70 @@ async def create_feedback_thread(
     Returns:
         The created Thread object, or None if skipped/failed.
     """
+    logger.info(f"[Feedback] create_feedback_thread called for {event_date} (force={force})")
+
     # Check for duplicate (unless forced)
     if not force:
         already_exists = await feedback_repository.has_feedback_for_date(
             guild.id, event_date
         )
         if already_exists:
-            logger.info(f"Feedback post already exists for {event_date}, skipping")
+            logger.info(f"[Feedback] Post already exists for {event_date}, skipping (use force=True to override)")
             return None
 
     # Get feedback forum channel from config
     config = await schedule_config_repository.get_config(guild.id)
     if not config or not config.get("feedback_channel_id"):
-        logger.warning("No feedback forum channel configured")
+        logger.warning("[Feedback] ABORT: No feedback_channel_id in schedule_config — run /configurefeedback")
         return None
 
     feedback_channel_id = config["feedback_channel_id"]
+    logger.info(f"[Feedback] Looking up forum channel ID {feedback_channel_id}")
     forum_channel = guild.get_channel(feedback_channel_id)
 
-    if not forum_channel or forum_channel.type != discord.ChannelType.forum:
+    if not forum_channel:
         logger.warning(
-            f"Feedback channel {feedback_channel_id} not found or not a forum channel"
+            f"[Feedback] ABORT: Channel {feedback_channel_id} not found in guild cache. "
+            "The bot may lack channel visibility or the ID is wrong."
         )
         return None
+    if forum_channel.type != discord.ChannelType.forum:
+        logger.warning(
+            f"[Feedback] ABORT: Channel '{forum_channel.name}' ({feedback_channel_id}) "
+            f"has type {forum_channel.type!r} — must be a Forum channel, not a text/announcement channel."
+        )
+        return None
+
+    logger.info(f"[Feedback] Forum channel OK: '{forum_channel.name}' ({feedback_channel_id})")
 
     # Get events for this date from DB
     events = await event_repository.get_events_by_guild_and_date_range(
         guild.id, event_date, event_date
     )
+    logger.info(f"[Feedback] Found {len(events)} event(s) in DB for {event_date}: {[e.name for e in events]}")
 
-    # Skip if all events for this date are cancelled
+    # Skip if all events for this date are cancelled (unless forced)
     non_cancelled = [
         ev for ev in events
         if ev.name.strip().upper() != "EVENT CANCELLED"
     ]
     if not non_cancelled:
-        logger.info(
-            f"All events cancelled for {event_date}, skipping feedback thread"
+        if not force:
+            if events:
+                logger.info(
+                    f"All events cancelled for {event_date}, skipping feedback thread"
+                )
+            else:
+                logger.warning(
+                    f"No events found in DB for {event_date}, skipping feedback thread. "
+                    "Use force=True or populate the schedule first."
+                )
+            return None
+        # force=True: create with a generic title since no valid events were found
+        logger.warning(
+            f"No non-cancelled events found for {event_date}, "
+            "creating generic feedback thread because force=True"
         )
-        return None
 
     # Build thread title and template
     title = build_thread_title(event_date, non_cancelled)
@@ -198,6 +223,11 @@ async def create_feedback_thread(
 
     # Create the forum thread
     try:
+        logger.info(
+            f"[Feedback] Calling create_thread: title='{title}', "
+            f"channel='{forum_channel.name}' ({forum_channel.id}), "
+            f"mentions_source={'raid-helper' if used_rh else 'leadership-fallback'}"
+        )
         thread_with_message = await forum_channel.create_thread(
             name=title,
             content=content,
@@ -228,7 +258,10 @@ async def create_feedback_thread(
         return thread
 
     except Exception as e:
-        logger.error(f"Failed to create feedback thread for {event_date}: {e}")
+        logger.error(
+            f"Failed to create feedback thread for {event_date}: {e}",
+            exc_info=True,
+        )
         return None
 
 
