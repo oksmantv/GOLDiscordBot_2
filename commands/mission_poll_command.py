@@ -1437,8 +1437,18 @@ class MissionPollCommands(commands.Cog):
                         )
                     else:
                         logger.warning(f"Raid-Helper update failed: {rh_error}")
+                        if log_channel:
+                            await log_channel.send(
+                                f"⚠️ Raid-Helper event auto-update failed for **{mission_name}** "
+                                f"({format_event_date(target_event.date)}): {rh_error}"
+                            )
                 except Exception as e:
                     logger.warning(f"Failed to update Raid-Helper event from briefing: {e}")
+                    if log_channel:
+                        await log_channel.send(
+                            f"⚠️ Raid-Helper event auto-update failed for **{mission_name}** "
+                            f"({format_event_date(target_event.date)}): {e}"
+                        )
 
             # ── Find the Raid-Helper event post in the events channel ──
             event_post_link = await self._find_event_post_link(
@@ -1458,18 +1468,6 @@ class MissionPollCommands(commands.Cog):
             if rh_updated:
                 # Bot auto-updated the Raid-Helper event — no manual action needed
                 announcement += "\n📋 Raid-Helper event updated with briefing content."
-            elif owner_mention:
-                # Auto-update failed — ask the mission author to do it manually
-                if event_post_link:
-                    announcement += (
-                        f"\n\n{owner_mention} Please update the "
-                        f"[scheduled event]({event_post_link}) with the `/edit` command."
-                    )
-                else:
-                    announcement += (
-                        f"\n\n{owner_mention} Please update the scheduled event "
-                        f"in the events channel with the `/edit` command."
-                    )
 
             # ── Update the schedule embed + send announcement ──
             try:
