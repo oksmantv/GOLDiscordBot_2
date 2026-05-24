@@ -879,10 +879,10 @@ class MissionPollCommands(commands.Cog):
     async def _do_rh_init_update(self, guild: discord.Guild, target_date: date):
         """Update the freshly created Raid-Helper event with initial placeholder content.
 
-        For Thursday events the description gets Training + Mission TBA headers
-        (with real training data from the DB if already scheduled).
-        Sunday events have no training component and no briefing at this stage,
-        so they are skipped — the update will happen when the poll resolves.
+        For Thursday events the description gets Training + Mission headers
+        (with real data from the DB for whichever events are already scheduled).
+        Sunday events are only updated when a mission is already pre-planned in
+        the DB; otherwise they are skipped until the poll resolves.
         """
         is_thursday = target_date.weekday() == 3
 
@@ -897,9 +897,22 @@ class MissionPollCommands(commands.Cog):
                 training_name = training_event.name or ""
                 instructor_name = training_event.creator_name or ""
 
+        # Look up any pre-planned mission already in the DB.
+        mission_content = ""
+        mission_event = await event_repository.get_event_by_guild_date_type(
+            guild.id, target_date, "Mission"
+        )
+        if mission_event and mission_event.name and mission_event.name.strip():
+            mission_name = mission_event.name.strip()
+            mission_creator = mission_event.creator_name or ""
+            if mission_creator:
+                mission_content = f"**{mission_name} by {mission_creator}**"
+            else:
+                mission_content = f"**{mission_name}**"
+
         # build_event_description returns "" for Sunday with no briefing content.
         description = raid_helper_service.build_event_description(
-            "",
+            mission_content,
             is_thursday=is_thursday,
             training_name=training_name,
             instructor_name=instructor_name,
@@ -907,7 +920,7 @@ class MissionPollCommands(commands.Cog):
 
         if not description:
             logger.info(
-                "RH init-update: skipping %s (Sunday event — no initial content to set)",
+                "RH init-update: skipping %s (no initial content to set)",
                 target_date,
             )
             return
