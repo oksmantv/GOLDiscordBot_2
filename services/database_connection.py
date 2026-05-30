@@ -15,9 +15,10 @@ class DatabaseConnection:
             try:
                 self._connection_pool = await asyncpg.create_pool(
                     Config.NEONDB_CONNECTION_STRING,
-                    min_size=1,
+                    min_size=0,
                     max_size=10,
-                    command_timeout=60
+                    command_timeout=60,
+                    max_inactive_connection_lifetime=300
                 )
                 print("Successfully connected to NeonDB")
             except Exception as e:

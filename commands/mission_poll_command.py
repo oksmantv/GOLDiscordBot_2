@@ -76,9 +76,23 @@ class MissionPollCommands(commands.Cog):
         self._auto_poll_fired: set[tuple[int, date]] = set()
         # Track which (guild_id, event_date) combos already got a post-creation RH update today
         self._rh_init_update_fired: set[tuple[int, date]] = set()
+        # Registry of active polls: {poll_id: end_time} — avoids DB queries when no poll is due
+        self._active_poll_end_times: dict[int, datetime] = {}
 
     async def cog_load(self):
         """Called when the cog is loaded. Start background tasks."""
+        # Rebuild the in-memory poll registry from the DB so we survive restarts
+        try:
+            active_polls = await mission_poll_repository.get_active_polls()
+            for poll in active_polls:
+                end_time = poll["poll_end_time"]
+                if end_time.tzinfo is None:
+                    end_time = end_time.replace(tzinfo=timezone.utc)
+                self._active_poll_end_times[poll["id"]] = end_time
+            logger.info(f"Loaded {len(self._active_poll_end_times)} active poll(s) into registry")
+        except Exception as e:
+            logger.warning(f"Could not load active polls into registry on startup: {e}")
+
         self._poll_monitor_loop.start()
         self._auto_poll_loop.start()
         self._rh_init_update_loop.start()
@@ -473,7 +487,7 @@ class MissionPollCommands(commands.Cog):
 
         # ── Save poll to database ──
         mission_thread_ids = [t.id for t, _, _ in thread_data]
-        await mission_poll_repository.create_poll(
+        new_poll_id = await mission_poll_repository.create_poll(
             guild_id=guild.id,
             poll_message_id=poll_message.id,
             channel_id=interaction.channel.id,
@@ -485,6 +499,9 @@ class MissionPollCommands(commands.Cog):
             created_by=interaction.user.id,
             links_message_id=links_message.id if links_message else None,
         )
+        if new_poll_id:
+            self._active_poll_end_times[new_poll_id] = poll_end_dt
+            logger.info(f"Registered poll #{new_poll_id} in monitor registry (ends {poll_end_dt})")
 
         confirmation_msg = (
             f"✅ Mission poll created for **{format_event_date(target_event.date)}** [{fw_abbrev}] "
@@ -1102,7 +1119,7 @@ class MissionPollCommands(commands.Cog):
 
         # Save poll to database
         mission_thread_ids = [t.id for t, _, _ in thread_data]
-        await mission_poll_repository.create_poll(
+        new_poll_id = await mission_poll_repository.create_poll(
             guild_id=guild.id,
             poll_message_id=poll_message.id,
             channel_id=events_channel.id,
@@ -1114,6 +1131,9 @@ class MissionPollCommands(commands.Cog):
             created_by=self.bot.user.id,
             links_message_id=links_message.id if links_message else None,
         )
+        if new_poll_id:
+            self._active_poll_end_times[new_poll_id] = poll_end_dt
+            logger.info(f"Registered auto-poll #{new_poll_id} in monitor registry (ends {poll_end_dt})")
 
         logger.info(
             "Auto-poll: created poll for %s with %d options in #%s",
@@ -1212,8 +1232,13 @@ class MissionPollCommands(commands.Cog):
     async def _poll_monitor_loop(self):
         """Check for ended polls and process results."""
         try:
-            active_polls = await mission_poll_repository.get_active_polls()
             now = datetime.now(timezone.utc)
+
+            # Skip DB entirely if no tracked poll has reached its end time yet
+            if not any(end_time <= now for end_time in self._active_poll_end_times.values()):
+                return
+
+            active_polls = await mission_poll_repository.get_active_polls()
 
             for poll_data in active_polls:
                 poll_end = poll_data["poll_end_time"]
@@ -1243,8 +1268,15 @@ class MissionPollCommands(commands.Cog):
     async def _before_poll_monitor(self):
         await self.bot.wait_until_ready()
 
+    def untrack_poll(self, poll_id: int) -> None:
+        """Remove a poll from the in-memory end-time registry."""
+        self._active_poll_end_times.pop(poll_id, None)
+
     async def _process_ended_poll(self, poll_data: dict):
         """Process a poll that has ended: determine winner & auto-schedule."""
+        # Remove from registry immediately — we are handling it now regardless of outcome
+        self._active_poll_end_times.pop(poll_data["id"], None)
+
         guild = self.bot.get_guild(poll_data["guild_id"])
         if not guild:
             logger.warning(f"Guild {poll_data['guild_id']} not found for poll #{poll_data['id']}")

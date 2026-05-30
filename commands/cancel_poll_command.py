@@ -86,6 +86,11 @@ class CancelPollCommand(commands.Cog):
         # Mark as failed in DB
         await mission_poll_repository.mark_failed(poll_id)
 
+        # Remove from the in-memory registry on the poll monitor cog
+        poll_cog = self.bot.cogs.get("MissionPollCommands")
+        if poll_cog:
+            poll_cog.untrack_poll(poll_id)
+
         # Build confirmation
         target_event = await event_repository.get_event_by_id(poll_data["target_event_id"])
         event_label = format_event_date(target_event.date) if target_event else f"event #{poll_data['target_event_id']}"
