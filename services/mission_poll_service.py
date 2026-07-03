@@ -183,6 +183,51 @@ def filter_threads_by_tags(
     return filtered
 
 
+def select_with_day_priority(
+    threads: list[discord.Thread],
+    count: int,
+    day_tag: Optional[str] = None,
+) -> tuple[list[discord.Thread], list[discord.Thread]]:
+    """Randomly select *count* threads, prioritising those tagged with *day_tag*.
+
+    Priority logic:
+    - Threads whose tag list contains *day_tag* (case-insensitive) are placed
+      in the priority pool.
+    - The priority pool fills as many slots as possible (up to *count*).
+    - Any remaining slots are filled from the rest of the pool.
+    - Both pools are independently shuffled before selection.
+    - If *day_tag* is None, or no threads carry the tag, all threads are
+      shuffled uniformly (identical to the previous behaviour).
+
+    Returns:
+        (selected, excluded) — the chosen threads and the leftover threads.
+    """
+    if len(threads) <= count:
+        return list(threads), []
+
+    if not day_tag:
+        shuffled = list(threads)
+        random.shuffle(shuffled)
+        return shuffled[:count], shuffled[count:]
+
+    day_lower = day_tag.lower()
+    priority = [t for t in threads if day_lower in [tag.lower() for tag in get_thread_tags(t)]]
+    rest = [t for t in threads if t not in priority]
+
+    random.shuffle(priority)
+    random.shuffle(rest)
+
+    selected = priority[:count]
+    if len(selected) < count:
+        needed = count - len(selected)
+        selected = selected + rest[:needed]
+
+    selected_ids = {t.id for t in selected}
+    excluded = [t for t in threads if t.id not in selected_ids]
+
+    return selected, excluded
+
+
 async def get_excluded_thread_ids(guild_id: int, threads: list[discord.Thread], weeks: int = 8) -> tuple[set[int], list[str]]:
     """Get thread IDs whose mission name matches an event scheduled in the past *weeks* weeks.
 

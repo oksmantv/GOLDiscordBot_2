@@ -15,6 +15,7 @@ from services.mission_poll_repository import mission_poll_repository
 from services.mission_poll_service import (
     fetch_all_forum_threads,
     filter_threads_by_tags,
+    select_with_day_priority,
     get_excluded_thread_ids,
     get_thread_composition_tags,
     format_poll_answer,
@@ -239,6 +240,7 @@ class MissionPollCommands(commands.Cog):
         options="Number of missions in the poll (default: 5, min: 3, max: 10)",
         composition="Filter by composition type (default: All)",
         exclusion_weeks="How many weeks back to check for recently played missions (default: 8)",
+        day="Prioritise missions tagged for this day (default: auto-derived from event date)",
     )
     async def missionpoll_command(
         self,
@@ -249,6 +251,7 @@ class MissionPollCommands(commands.Cog):
         options: app_commands.Range[int, 3, 10] = 5,
         composition: str = "All",
         exclusion_weeks: int = 8,
+        day: Optional[str] = None,
     ):
         """Handle the /missionpoll command."""
         # ── Permission check (admin or @Editor) ──
@@ -395,22 +398,33 @@ class MissionPollCommands(commands.Cog):
             )
             return
 
-        # ── Random selection if more than requested options ──
+        # ── Determine effective day-priority tag ──
+        _DAY_MAP = {3: "Thursday", 6: "Sunday"}
+        if day is None:
+            effective_day = _DAY_MAP.get(target_event.date.weekday())
+        elif day.lower() == "none":
+            effective_day = None
+        else:
+            effective_day = day
+
+        if effective_day:
+            logger.info(f"Day-priority active: prioritising '{effective_day}'-tagged missions")
+
+        # ── Random selection with optional day-priority ──
         excluded_from_poll = []
         if len(remaining) > options:
-            random.shuffle(remaining)
-            selected = remaining[:options]
-            excluded_from_poll = remaining[options:]
+            selected, excluded_from_poll = select_with_day_priority(remaining, options, effective_day)
             remaining = selected
 
             # DM the user about excluded missions
             excluded_names = ", ".join(t.name for t in excluded_from_poll)
+            day_note = f" (prioritised **{effective_day}**-tagged missions)" if effective_day else ""
             dm_embed = discord.Embed(
                 title="ℹ️ Mission Poll — Random Selection Applied",
                 color=discord.Color.blue(),
                 description=(
                     f"**{len(excluded_from_poll) + options}** missions matched your filter, "
-                    f"but you requested {options} options.\n\n"
+                    f"but you requested {options} options{day_note}.\n\n"
                     f"**Randomly selected:** {options} missions\n"
                     f"**Excluded:** {excluded_names}"
                 ),
@@ -798,6 +812,21 @@ class MissionPollCommands(commands.Cog):
             return [c for c in presets if current in str(c.value) or current.lower() in c.name.lower()]
         return presets
 
+    # ─── Autocomplete: day ─────────────────────────────────────────────
+    @missionpoll_command.autocomplete("day")
+    async def day_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        choices = [
+            app_commands.Choice(name="Auto (derive from event date)", value="auto"),
+            app_commands.Choice(name="Thursday — prioritise Thursday-tagged missions", value="Thursday"),
+            app_commands.Choice(name="Sunday — prioritise Sunday-tagged missions", value="Sunday"),
+            app_commands.Choice(name="None — no day priority, fully random", value="none"),
+        ]
+        if current:
+            return [c for c in choices if current.lower() in c.name.lower() or current.lower() in c.value.lower()]
+        return choices
+
     # ─── Background task: auto mission poll (every 1 minute) ─────────
     @tasks.loop(minutes=1)
     async def _auto_poll_loop(self):
@@ -823,10 +852,14 @@ class MissionPollCommands(commands.Cog):
             else:
                 return  # Not a poll day
 
+            # Derive day-priority tag from the *target* event's weekday
+            _AUTO_DAY_MAP = {3: "Thursday", 6: "Sunday"}
+            auto_day_tag = _AUTO_DAY_MAP.get(target_date.weekday())
+
             for guild in self.bot.guilds:
                 if guild.id != Config.GUILD_ID:
                     continue
-                await self._try_auto_poll(guild, target_date)
+                await self._try_auto_poll(guild, target_date, day_tag=auto_day_tag)
 
         except Exception as e:
             logger.error(f"Auto-poll loop error: {e}", exc_info=True)
@@ -973,7 +1006,7 @@ class MissionPollCommands(commands.Cog):
                 f"Failed to update Raid-Helper event for {target_date}.",
             )
 
-    async def _try_auto_poll(self, guild: discord.Guild, target_date: date):
+    async def _try_auto_poll(self, guild: discord.Guild, target_date: date, *, day_tag: Optional[str] = None):
         """Attempt to create an automatic mission poll for *target_date*."""
         # De-duplicate: only fire once per (guild, date)
         key = (guild.id, target_date)
@@ -1061,8 +1094,12 @@ class MissionPollCommands(commands.Cog):
         # ── Multiple missions — create poll ──
         selected = remaining
         if len(remaining) > _AUTO_POLL_OPTIONS:
-            random.shuffle(remaining)
-            selected = remaining[:_AUTO_POLL_OPTIONS]
+            selected, _ = select_with_day_priority(remaining, _AUTO_POLL_OPTIONS, day_tag)
+            if day_tag:
+                logger.info(
+                    "Auto-poll: day-priority '%s' applied — selected %d from %d missions",
+                    day_tag, len(selected), len(remaining),
+                )
 
         fw_abbrev = abbreviate_framework(_AUTO_POLL_FRAMEWORK)
         poll_title = f"{format_event_date(target_date)} - Mission Poll [{fw_abbrev}]"
