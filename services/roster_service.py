@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from typing import Optional
 from urllib.parse import quote
 import logging
+import re
 
 from .roster_repository import roster_repository
 from .roster_config_repository import roster_config_repository
@@ -31,20 +32,38 @@ RANKS = [
     ("Cpl.", "Corporal",            437983493864030219,   4, "<:CPL:1477456474174259350>"),
     ("LCpl.", "Lance Corporal",     437983720583069698,   5, "<:LCPL:1477456475193475305>"),
     ("Spc.", "Specialist",          1271423656249004116,  6, "<:SPC:1477456483343143097>"),
-    ("1CA.", "First Class Airman",  437984886150791188,   7, None),
-    ("Pfc.", "Private 1st Class",   437983988477460500,   8, "<:PFC:1477456478033154221>"),
-    ("Psc.", "Private 2nd Class",   1271423463395033140,  9, "<:PSC:1477456479320670248>"),
-    ("Amn.", "Airman",              437985055613124618,  10, "<:Airman:1545484226240053358>"),
-    ("Pvt.", "Private",             437984103220903949,  11, "<:PVT:1477456476757823571>"),
-    ("Rct.", "Recruit",             437985345129152520,  12, "<:RCT:1477456480767840276>"),
+    ("1CA.", "First Class Airman",  437984886150791188,   7, "<:1CA:1503127636594004120>"),
+    ("SrAmn.", "Senior Airman",     437984687181529090,   8, "<:SrAmn:1503128012772610058>"),
+    ("Pfc.", "Private 1st Class",   437983988477460500,   9, "<:PFC:1477456478033154221>"),
+    ("Psc.", "Private 2nd Class",   1271423463395033140, 10, "<:PSC:1477456479320670248>"),
+    ("Amn.", "Airman",              437985055613124618,  11, "<:Airman:1545484226240053358>"),
+    ("Pvt.", "Private",             437984103220903949,  12, "<:PVT:1477456476757823571>"),
+    ("Rct.", "Recruit",             437985345129152520,  13, "<:RCT:1477456480767840276>"),
 ]
 
 # Quick lookup sets
-RANK_ROLE_IDS = {r[2] for r in RANKS}
-RANK_BY_ROLE_ID = {r[2]: (r[0], r[1], r[3], r[4]) for r in RANKS}  # id -> (prefix, name, order, emoji)
+RANK_ROLE_IDS = {r[2] for r in RANKS if r[2]}
+RANK_BY_ROLE_ID = {r[2]: (r[0], r[1], r[3], r[4]) for r in RANKS if r[2]}  # id -> (prefix, name, order, emoji)
 RANK_PREFIXES = [r[0] for r in RANKS]  # used for stripping from nicknames
 # Emoji lookup by rank prefix
 RANK_EMOJI_BY_PREFIX = {r[0]: r[4] for r in RANKS if r[4]}  # prefix -> emoji string
+RANK_BY_PREFIX = {r[0].lower(): (r[0], r[1], r[3], r[4]) for r in RANKS}
+RANK_NAME_ALIASES = {
+    "1ca": "1CA.",
+    "1ca.": "1CA.",
+    "firstclassairman": "1CA.",
+    "sramn": "SrAmn.",
+    "sramn.": "SrAmn.",
+    "seniorairman": "SrAmn.",
+    "sr amn": "SrAmn.",
+}
+
+
+def _normalize_rank_token(value: str) -> str:
+    """Normalize role text so role-name aliases still match when IDs drift."""
+    if not value:
+        return ""
+    return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -56,14 +75,27 @@ def _extract_name_and_rank(member: discord.Member) -> tuple[str, Optional[str], 
     If no rank role is found, ``rank_prefix`` and ``rank_full_name`` are None
     and ``rank_order`` is 999.
     """
-    # 1. Find the highest rank role the member has
+    # 1. Find the highest rank role the member has.
+    # Use both the stored role IDs and a fallback based on the role name so
+    # ranks still resolve when the guild role ID changes or a shorthand is used.
     rank_prefix: Optional[str] = None
     rank_name: Optional[str] = None
     rank_order: int = 999
 
     for role in member.roles:
-        if role.id in RANK_BY_ROLE_ID:
-            prefix, name, order, _emoji = RANK_BY_ROLE_ID[role.id]
+        role_id = getattr(role, "id", None)
+        if role_id in RANK_BY_ROLE_ID:
+            prefix, name, order, _emoji = RANK_BY_ROLE_ID[role_id]
+            if order < rank_order:
+                rank_prefix = prefix
+                rank_name = name
+                rank_order = order
+            continue
+
+        normalized_role_name = _normalize_rank_token(getattr(role, "name", ""))
+        alias_prefix = RANK_NAME_ALIASES.get(normalized_role_name)
+        if alias_prefix:
+            prefix, name, order, _emoji = RANK_BY_PREFIX[alias_prefix.lower()]
             if order < rank_order:
                 rank_prefix = prefix
                 rank_name = name
