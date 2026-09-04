@@ -40,9 +40,32 @@ class DateFilterService:
         end_date = center_date + timedelta(weeks=4)
         
         return start_date, end_date
-    
+
+    def get_future_event_range(self, center_date: date = None, lookahead_weeks: int = 52) -> tuple[date, date]:
+        """Return the default range for relevant upcoming events."""
+        if center_date is None:
+            center_date = date.today()
+
+        start_date = center_date
+        end_date = center_date + timedelta(weeks=lookahead_weeks)
+        return start_date, end_date
+
+    def looks_like_date_search(self, value: str) -> bool:
+        """Return True when the typed value looks like a date fragment such as DD-MM-YY or DD-MM."""
+        if value is None:
+            return False
+
+        normalized = value.strip()
+        if not normalized:
+            return False
+
+        return bool(
+            re.match(r"^\d{1,2}[-/]\d{1,2}([-/]\d{2,4})?$", normalized)
+            or re.match(r"^\d{4}[-/]\d{1,2}([-/]\d{1,2})?$", normalized)
+        )
+
     async def get_available_events(self, manual_date: str = None, search: str = None) -> List[Event]:
-        """Get available events for selection in dropdown. Supports wide search if search is provided."""
+        """Get available events for selection in dropdown. Defaults to future events unless the user is typing a relevant date."""
         guild_id = Config.GUILD_ID
 
         # If manual_date is provided and valid, only search that date
@@ -56,25 +79,51 @@ class DateFilterService:
             else:
                 return []
 
-        # If search string is provided, search ±1 year for matching events
+        # If the user is typing a date, search a wider window so old dates remain usable.
         if search and search.strip():
+            search_clean = search.strip()
+            parsed_date = self.parse_manual_date(search_clean)
+            if parsed_date:
+                events = await event_repository.get_events_by_guild_and_date_range(
+                    guild_id, parsed_date, parsed_date
+                )
+                return events
+
+            if self.looks_like_date_search(search_clean):
+                today = date.today()
+                start_date = today - timedelta(weeks=52)
+                end_date = today + timedelta(weeks=52)
+                events = await event_repository.get_events_by_guild_and_date_range(
+                    guild_id, start_date, end_date
+                )
+                filtered = []
+                search_variants = {
+                    search_clean.lower(),
+                    search_clean.lower().replace('-', '/'),
+                    search_clean.lower().replace('/', '-'),
+                }
+                for event in events:
+                    formatted = self.format_event_for_dropdown(event).lower()
+                    if any(variant in formatted for variant in search_variants):
+                        filtered.append(event)
+                return filtered
+
+            # Otherwise use the relevant future window and match by text.
             today = date.today()
-            start_date = today - timedelta(weeks=52)
+            start_date = today
             end_date = today + timedelta(weeks=52)
             events = await event_repository.get_events_by_guild_and_date_range(
                 guild_id, start_date, end_date
             )
-            # Filter events by partial date or name match
             filtered = []
-            search_lower = search.lower()
+            search_lower = search_clean.lower()
             for event in events:
                 formatted = self.format_event_for_dropdown(event).lower()
                 if search_lower in formatted:
                     filtered.append(event)
             return filtered
 
-        # Default: 8-week range
-        start_date, end_date = self.get_8_week_range()
+        start_date, end_date = self.get_future_event_range()
         events = await event_repository.get_events_by_guild_and_date_range(
             guild_id, start_date, end_date
         )

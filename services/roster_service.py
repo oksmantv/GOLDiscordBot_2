@@ -7,7 +7,6 @@ import logging
 
 from .roster_repository import roster_repository
 from .roster_config_repository import roster_config_repository
-from .log_channel_service import report_failure
 from .loa_repository import loa_repository
 
 logger = logging.getLogger(__name__)
@@ -31,14 +30,13 @@ RANKS = [
     ("Sgt.", "Sergeant",            437982506713874433,   3, "<:SGT:1477456482260750396>"),
     ("Cpl.", "Corporal",            437983493864030219,   4, "<:CPL:1477456474174259350>"),
     ("LCpl.", "Lance Corporal",     437983720583069698,   5, "<:LCPL:1477456475193475305>"),
-    ("Spc.",   "Specialist",          1271423656249004116,  6, "<:SPC:1477456483343143097>"),
-    ("SrAmn.", "Senior Airman",       437984687181529090,   7, "<:SrAmn:1503128012772610058>"),
-    ("1CA.",   "First Class Airman",  437984886150791188,   8, "<:1CA:1503127636594004120>"),
-    ("Pfc.",   "Private 1st Class",   437983988477460500,   9, "<:PFC:1477456478033154221>"),
-    ("Psc.",   "Private 2nd Class",   1271423463395033140, 10, "<:PSC:1477456479320670248>"),
-    ("Am.",    "Airman",              437985055613124618,  11, None),
-    ("Pvt.",   "Private",             437984103220903949,  12, "<:PVT:1477456476757823571>"),
-    ("Rct.",   "Recruit",             437985345129152520,  13, "<:RCT:1477456480767840276>"),
+    ("Spc.", "Specialist",          1271423656249004116,  6, "<:SPC:1477456483343143097>"),
+    ("1CA.", "First Class Airman",  437984886150791188,   7, None),
+    ("Pfc.", "Private 1st Class",   437983988477460500,   8, "<:PFC:1477456478033154221>"),
+    ("Psc.", "Private 2nd Class",   1271423463395033140,  9, "<:PSC:1477456479320670248>"),
+    ("Amn.", "Airman",              437985055613124618,  10, "<:Airman:1545484226240053358>"),
+    ("Pvt.", "Private",             437984103220903949,  11, "<:PVT:1477456476757823571>"),
+    ("Rct.", "Recruit",             437985345129152520,  12, "<:RCT:1477456480767840276>"),
 ]
 
 # Quick lookup sets
@@ -75,11 +73,15 @@ def _extract_name_and_rank(member: discord.Member) -> tuple[str, Optional[str], 
     display = member.display_name.strip()
 
     if rank_prefix:
-        # Check if the display name starts with the rank prefix
+        # Check if the display name starts with the rank prefix.
+        # Some older roster names used "Am." while the current shorthand is "Amn.".
         for pfx in RANK_PREFIXES:
             if display.lower().startswith(pfx.lower()):
                 display = display[len(pfx):].strip().lstrip(".-_ ")
                 break
+        else:
+            if rank_prefix == "Amn." and display.lower().startswith("am."):
+                display = display[3:].strip().lstrip(".-_ ")
 
     # Fallback: if stripping left an empty string, use the original
     if not display:
@@ -144,12 +146,7 @@ async def scan_roster(guild: discord.Guild) -> dict:
     loa_user_ids = {loa["user_id"] for loa in active_loas}
 
     present_user_ids: list[int] = []
-    rows: list[tuple] = []
-    active_count = 0
-    reserve_count = 0
-
-    hellfish_role = guild.get_role(HELLFISH_ROLE_ID)
-    aac_role      = guild.get_role(AAC_ROLE_ID)
+    updated = 0
 
     for member in guild.members:
         if member.bot:
@@ -167,6 +164,8 @@ async def scan_roster(guild: discord.Guild) -> dict:
         # Determine subgroup — check regardless of active role because
         # LOA members lose @Active but keep their subgroup role (FH/AAC)
         subgroup: Optional[str] = None
+        hellfish_role = guild.get_role(HELLFISH_ROLE_ID)
+        aac_role      = guild.get_role(AAC_ROLE_ID)
         if hellfish_role and hellfish_role in member.roles:
             subgroup = "Flying Hellfish"
         elif aac_role and aac_role in member.roles:
@@ -178,27 +177,33 @@ async def scan_roster(guild: discord.Guild) -> dict:
         # roster (shown with strikethrough) even though they lose @Active
         effective_active = is_active or (on_loa and subgroup is not None)
 
-        if is_active:
-            active_count += 1
-        if is_reserve:
-            reserve_count += 1
-
-        rows.append((
-            guild.id, member.id, clean_name, rank_prefix, rank_name,
-            rank_order, effective_active, is_reserve, subgroup, on_loa,
-        ))
-
-    # Single bulk upsert instead of N individual round-trips
-    await roster_repository.bulk_upsert_members(rows)
+        await roster_repository.upsert_member(
+            guild_id=guild.id,
+            user_id=member.id,
+            nickname=clean_name,
+            rank_prefix=rank_prefix,
+            rank_name=rank_name,
+            rank_order=rank_order,
+            is_active=effective_active,
+            is_reserve=is_reserve,
+            subgroup=subgroup,
+            on_loa=on_loa,
+        )
+        updated += 1
 
     # Remove members who left the server or lost the @Member role
     removed = await roster_repository.remove_absent_members(guild.id, present_user_ids)
+
+    active_count  = sum(1 for uid in present_user_ids
+                        if active_role and active_role in guild.get_member(uid).roles)
+    reserve_count = sum(1 for uid in present_user_ids
+                        if reserve_role and reserve_role in guild.get_member(uid).roles)
 
     summary = {
         "total": len(present_user_ids),
         "active": active_count,
         "reserve": reserve_count,
-        "updated": len(rows),
+        "updated": updated,
         "removed": removed,
     }
     logger.info(f"Roster scan complete for {guild.name}: {summary}")
@@ -214,20 +219,15 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
     Reserve embed.  Splitting reserves into their own embed avoids
     field-length truncation on the main roster.
     """
-    import asyncio as _asyncio
     now_uk = datetime.now(UK_TZ)
 
-    (active_members, reserve_members), (total_count, loa_count) = await _asyncio.gather(
-        _asyncio.gather(
-            roster_repository.get_active_members(guild_id),
-            roster_repository.get_reserve_members(guild_id),
-        ),
-        roster_repository.get_summary_counts(guild_id),
-    )
+    active_members  = await roster_repository.get_active_members(guild_id)
+    reserve_members = await roster_repository.get_reserve_members(guild_id)
 
-    # Derive counts from loaded data — no extra DB queries needed
-    active_count  = len(active_members)
-    reserve_count = len(reserve_members)
+    total_count   = await roster_repository.get_member_count(guild_id)
+    active_count  = await roster_repository.get_active_count(guild_id)
+    reserve_count = await roster_repository.get_reserve_count(guild_id)
+    loa_count     = await roster_repository.get_loa_count(guild_id)
 
     # active_count includes LOA members; split for clarity
     active_available = active_count - loa_count
@@ -243,7 +243,7 @@ async def build_roster_embeds(guild_id: int) -> list[discord.Embed]:
 
     # ── Split Hellfish into Leadership, Senior Enlisted, Enlisted ──
     LEADERSHIP_PREFIXES = {"1Lt.", "2Lt.", "Sgt.", "Cpl."}
-    SENIOR_ENLISTED_PREFIXES = {"LCpl.", "Spc.", "SrAmn."}
+    SENIOR_ENLISTED_PREFIXES = {"LCpl.", "Spc."}
     fh_leadership: list[dict] = []
     fh_senior: list[dict] = []
     fh_enlisted: list[dict] = []
@@ -412,9 +412,3 @@ async def update_roster_message(bot: discord.Client, guild_id: int) -> None:
         await roster_config_repository.set_config(guild_id, config["channel_id"], msg.id)
     except Exception as e:
         logger.error(f"Failed to update Roster embed message: {e}")
-        await report_failure(
-            guild,
-            "Roster Service",
-            "Failed to update roster embed message.",
-            e,
-        )
