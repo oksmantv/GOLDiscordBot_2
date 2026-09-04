@@ -30,7 +30,7 @@ class DateFilterServiceTests(unittest.TestCase):
         self.assertEqual(clean_name, "Example User")
         self.assertEqual(rank_prefix, "SrAmn.")
         self.assertEqual(rank_name, "Senior Airman")
-        self.assertEqual(rank_order, 8)
+        self.assertEqual(rank_order, 7)
 
     def test_roster_1ca_role_alias_is_recognized(self):
         member = SimpleNamespace(
@@ -43,7 +43,7 @@ class DateFilterServiceTests(unittest.TestCase):
         self.assertEqual(clean_name, "Example User")
         self.assertEqual(rank_prefix, "1CA.")
         self.assertEqual(rank_name, "First Class Airman")
-        self.assertEqual(rank_order, 7)
+        self.assertEqual(rank_order, 8)
 
     def test_airman_and_sramn_emoji_mapping(self):
         import services.roster_service as roster_service
