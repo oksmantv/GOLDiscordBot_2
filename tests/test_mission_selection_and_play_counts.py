@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from services.mission_play_count_service import (
     MissionHistoryEntry,
     compute_play_data_for_threads,
+    MissionPlayCountService,
 )
 from services.mission_poll_service import select_with_day_priority
 from services import mission_poll_service
@@ -145,6 +146,41 @@ class MissionSelectionAndPlayCountTests(unittest.TestCase):
         excluded = asyncio.run(_run_check())
         self.assertIn(10, excluded)
         self.assertNotIn(11, excluded)
+
+    def test_play_count_service_fallback_without_repo_helper(self):
+        thread = _Thread(1, "Operation Dawn", ["Sunday"], self.now)
+
+        class _Event(SimpleNamespace):
+            pass
+
+        async def _run_check():
+            import services.mission_play_count_service as mpcs
+
+            original_helper = getattr(mpcs.event_repository, "get_past_mission_history", None)
+            original_get_all = mpcs.event_repository.get_all_events_by_guild
+            mpcs.event_repository.get_past_mission_history = None
+
+            async def _fake_get_all(guild_id):
+                return [
+                    _Event(type="Mission", date=date(2025, 1, 1), name="Operation Dawn"),
+                    _Event(type="Mission", date=date(2025, 1, 2), name="EVENT CANCELLED"),
+                    _Event(type="Training", date=date(2025, 1, 3), name="CQB"),
+                ]
+
+            mpcs.event_repository.get_all_events_by_guild = _fake_get_all
+
+            try:
+                service = MissionPlayCountService()
+                data = await service.get_play_data_for_threads(123, [thread])
+                return data
+            finally:
+                mpcs.event_repository.get_all_events_by_guild = original_get_all
+                mpcs.event_repository.get_past_mission_history = original_helper
+
+        import asyncio
+
+        data = asyncio.run(_run_check())
+        self.assertEqual(data.thread_play_counts[1], 1)
 
 
 if __name__ == "__main__":

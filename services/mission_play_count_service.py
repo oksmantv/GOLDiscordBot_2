@@ -198,8 +198,31 @@ def compute_play_data_for_threads(
 
 
 class MissionPlayCountService:
+    async def _fetch_past_mission_rows(self, guild_id: int) -> list[dict]:
+        history_fetcher = getattr(event_repository, "get_past_mission_history", None)
+        if callable(history_fetcher):
+            rows = await history_fetcher(guild_id)
+            return [{"name": row["name"], "date": row["date"]} for row in rows]
+
+        # Backward-compatible fallback for deployments where the repository method
+        # is not yet present. This keeps /missionplayedcount functional.
+        events = await event_repository.get_all_events_by_guild(guild_id)
+        today = date.today()
+        rows = []
+        for event in events:
+            if event.type != "Mission":
+                continue
+            if not event.date or event.date >= today:
+                continue
+            if not (event.name or "").strip():
+                continue
+            if (event.name or "").strip().upper() == "EVENT CANCELLED":
+                continue
+            rows.append({"name": event.name, "date": event.date})
+        return rows
+
     async def get_play_data_for_threads(self, guild_id: int, threads: list) -> MissionPlayData:
-        rows = await event_repository.get_past_mission_history(guild_id)
+        rows = await self._fetch_past_mission_rows(guild_id)
         history_entries = [
             MissionHistoryEntry(name=row["name"], played_on=row["date"])
             for row in rows
