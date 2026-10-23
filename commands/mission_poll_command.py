@@ -27,6 +27,7 @@ from services.mission_poll_service import (
     get_log_channel,
     ordinal,
     MAX_POLL_OPTIONS,
+    COMPOSITION_ABBREVIATIONS,
 )
 from services.mission_play_count_service import (
     mission_play_count_service,
