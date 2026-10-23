@@ -31,6 +31,8 @@ async def force_register_commands():
             print("✅ Loaded ping_command")
             await bot.load_extension('commands.configure_command')
             print("✅ Loaded configure_command")
+            await bot.load_extension('commands.send_message_command')
+            print("✅ Loaded send_message_command")
             
             # Check what commands we have
             print(f"Commands to register: {[cmd.name for cmd in bot.tree.get_commands()]}")

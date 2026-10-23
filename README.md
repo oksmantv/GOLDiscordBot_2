@@ -38,6 +38,7 @@ GOLDiscordBot_2/
 │   ├── mission_poll_command.py           # /missionpoll, /missionlist, /completepoll + poll monitor, auto-poll, RH init-update loops
 │   ├── cancel_poll_command.py            # /cancelpoll
 │   ├── feedback_command.py               # /feedback, /configurefeedback, /updateevent + auto-feedback loop
+│   ├── send_message_command.py           # /sendmessage (admin broadcast/DM helper)
 │   ├── loa_command.py                    # /loa + expiry background loop
 │   ├── roster_command.py                 # /configureroster, /updateroster + hourly loop
 │   └── minimal_configure_cog.py          # Lightweight configure fallback
@@ -137,6 +138,7 @@ The bot will automatically create database tables, load all cogs, sync slash com
 | `/loa` | Any member | Request a leave of absence (start/end date) |
 | `/configureroster` | Admin | Set the roster channel and post the initial roster embed |
 | `/updateroster` | Admin | Force a fresh roster scan and embed update |
+| `/sendmessage` | Admin | Send bot text to a selected channel or user DM |
 | `/ping` | Anyone | Health check |
 
 ## Background Tasks
