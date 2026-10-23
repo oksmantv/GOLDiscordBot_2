@@ -11,6 +11,7 @@ from services.mission_play_count_service import (
     MissionPlayCountService,
     canonicalize_history_name,
     should_count_history_name,
+    find_best_matching_thread_for_history_name,
 )
 from services.mission_poll_service import select_with_day_priority
 from services import mission_poll_service
@@ -196,6 +197,27 @@ class MissionSelectionAndPlayCountTests(unittest.TestCase):
 
         data = asyncio.run(_run_check())
         self.assertEqual(data.thread_play_counts[1], 1)
+
+    def test_link_hint_fuzzy_match_catches_typo(self):
+        thread = _Thread(1, "Operation Tugowar", ["Thursday"], self.now)
+        matched, score = find_best_matching_thread_for_history_name(
+            "Opeartion Tugowar",
+            [thread],
+            min_score=0.90,
+        )
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.id, 1)
+        self.assertGreaterEqual(score, 0.90)
+
+    def test_link_hint_fuzzy_match_rejects_weak_candidate(self):
+        thread = _Thread(1, "Operation Brockendome", ["Sunday"], self.now)
+        matched, score = find_best_matching_thread_for_history_name(
+            "Malden Brocken Dome",
+            [thread],
+            min_score=0.90,
+        )
+        self.assertIsNone(matched)
+        self.assertLess(score, 0.90)
 
 
 if __name__ == "__main__":

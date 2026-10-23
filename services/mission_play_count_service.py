@@ -39,6 +39,11 @@ _DAY_TRAINING_WRAPPER_PREFIX_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_OPERATION_TYPO_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:opeartion|opertaion|operaiton|opration|opertion)\b",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class MissionHistoryEntry:
@@ -118,11 +123,55 @@ def canonicalize_history_name(name: str) -> str:
     value = _REPLAY_PREFIX_PATTERN.sub("", value)
     value = _UNPLAYED_SUFFIX_PATTERN.sub("", value)
     value = _DAY_TRAINING_WRAPPER_PREFIX_PATTERN.sub("", value)
+    value = _OPERATION_TYPO_PREFIX_PATTERN.sub("Operation", value)
     return value.strip()
 
 
 def _similarity(a: str, b: str) -> float:
     return SequenceMatcher(a=a, b=b).ratio()
+
+
+def find_best_matching_thread_for_history_name(
+    history_name: str,
+    threads: list,
+    *,
+    min_score: float = 0.90,
+) -> tuple[Optional[object], float]:
+    """Find best matching thread for informational link hints only.
+
+    This helper must not be used to attach play counts; it is intentionally
+    separate from the stricter count-attachment policy.
+    """
+    canonical_name = canonicalize_history_name(history_name)
+    if not should_count_history_name(canonical_name):
+        return None, 0.0
+
+    target_norm = normalize_mission_title(canonical_name, strip_event_wrapper=True)
+    if not target_norm:
+        return None, 0.0
+
+    exact_norm_match = None
+    best_thread = None
+    best_score = 0.0
+
+    for thread in threads:
+        thread_norm = normalize_mission_title(thread.name or "")
+        if thread_norm == target_norm:
+            exact_norm_match = thread
+            break
+
+        score = _similarity(target_norm, thread_norm)
+        if score > best_score:
+            best_score = score
+            best_thread = thread
+
+    if exact_norm_match is not None:
+        return exact_norm_match, 1.0
+
+    if best_thread is not None and best_score >= min_score:
+        return best_thread, best_score
+
+    return None, best_score
 
 
 def compute_play_data_for_threads(

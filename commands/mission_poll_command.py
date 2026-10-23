@@ -28,7 +28,11 @@ from services.mission_poll_service import (
     ordinal,
     MAX_POLL_OPTIONS,
 )
-from services.mission_play_count_service import mission_play_count_service, normalize_mission_title
+from services.mission_play_count_service import (
+    mission_play_count_service,
+    normalize_mission_title,
+    find_best_matching_thread_for_history_name,
+)
 from services.training_play_count_service import training_play_count_service
 from services.schedule_config_repository import schedule_config_repository
 from services.event_repository import event_repository
@@ -750,6 +754,16 @@ class MissionPollCommands(commands.Cog):
             if outside_filter_thread and all(t.id != outside_filter_thread.id for t in filtered_threads):
                 outside_url = f"https://discord.com/channels/{guild.id}/{outside_filter_thread.id}"
                 link_hint = f" | Briefing outside filter: [link]({outside_url})"
+            elif outside_filter_thread is None:
+                best_thread, score = find_best_matching_thread_for_history_name(
+                    row.name,
+                    all_threads,
+                    min_score=0.90,
+                )
+                if best_thread and all(t.id != best_thread.id for t in filtered_threads):
+                    best_url = f"https://discord.com/channels/{guild.id}/{best_thread.id}"
+                    score_label = f"{score:.2f}"
+                    link_hint = f" | Possible briefing outside filter ({score_label}): [link]({best_url})"
             history_lines.append(
                 f"• {row.name}\n"
                 f"  Plays: **{row.play_count}** | Last played: {last_played_text}{link_hint}"
