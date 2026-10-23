@@ -1012,12 +1012,11 @@ class MissionPollCommands(commands.Cog):
             text = (value or "").casefold()
             text = re.sub(r"<a?:\w+:\d+>", " ", text)
             text = re.sub(r"[^a-z0-9\s]", " ", text)
-            text = re.sub(r"\b(editor|lt|1lt|2lt|sgt|cpt|capt|maj|cmdr|dr)\b", " ", text)
             text = re.sub(r"\s+", " ", text).strip()
             return text
 
         editor_ids = {m.id for m in editors}
-        editor_name_index: dict[str, int] = {}
+        alias_to_editor_ids: dict[str, set[int]] = defaultdict(set)
         for m in editors:
             candidates = [
                 m.display_name,
@@ -1027,8 +1026,15 @@ class MissionPollCommands(commands.Cog):
             ]
             for candidate in candidates:
                 cleaned = _clean_name(candidate)
-                if cleaned:
-                    editor_name_index[cleaned] = m.id
+                if cleaned and len(cleaned) >= 3:
+                    alias_to_editor_ids[cleaned].add(m.id)
+
+        # Only permit fallback attribution when an alias maps to exactly one editor.
+        unique_editor_aliases: dict[str, int] = {
+            alias: next(iter(member_ids))
+            for alias, member_ids in alias_to_editor_ids.items()
+            if len(member_ids) == 1
+        }
 
         counts_by_editor: dict[int, int] = defaultdict(int)
         unknown_creator_count = 0
@@ -1050,7 +1056,7 @@ class MissionPollCommands(commands.Cog):
                 continue
 
             creator_name = _clean_name(getattr(event, "creator_name", ""))
-            matched_editor_id = editor_name_index.get(creator_name)
+            matched_editor_id = unique_editor_aliases.get(creator_name)
             if matched_editor_id is not None:
                 counts_by_editor[matched_editor_id] += 1
                 continue
@@ -1058,18 +1064,21 @@ class MissionPollCommands(commands.Cog):
             unknown_creator_count += 1
 
         lines: list[str] = []
-        for m in sorted(editors, key=lambda e: (-counts_by_editor.get(e.id, 0), e.display_name.casefold())):
-            lines.append(f"• **{counts_by_editor.get(m.id, 0)}** — {m.mention}")
+        editors_with_counts = [m for m in editors if counts_by_editor.get(m.id, 0) > 0]
+        for m in sorted(editors_with_counts, key=lambda e: (-counts_by_editor.get(e.id, 0), e.display_name.casefold())):
+            safe_name = discord.utils.escape_markdown(m.display_name)
+            lines.append(f"• **{counts_by_editor.get(m.id, 0)}** — {safe_name}")
 
         footer_text = (
             f"Mission events counted: {mission_total} • "
             f"Matched to editors: {sum(counts_by_editor.values())} • "
-            f"Unmatched creator rows: {unknown_creator_count}"
+            f"Unmatched creator rows: {unknown_creator_count} • "
+            f"Editors shown: {len(editors_with_counts)}/{len(editors)}"
         )
 
         embed = discord.Embed(
             title="Mission Counts by Editor",
-            description="\n".join(lines) if lines else "No rows.",
+            description="\n".join(lines) if lines else "No matched editor mission rows.",
             color=discord.Color.blurple(),
         )
         embed.set_footer(text=footer_text)
