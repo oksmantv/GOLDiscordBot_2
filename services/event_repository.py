@@ -154,5 +154,19 @@ class EventRepository:
         results = await db_connection.execute_query(query, guild_id)
         return [Event.from_db_row(row) for row in results]
 
+        async def get_past_mission_history(self, guild_id: int) -> list:
+                """Get all historical mission names used for play-count calculations."""
+                query = """
+                SELECT name, date
+                FROM events
+                WHERE guild_id = $1
+                    AND type = 'Mission'
+                    AND date < CURRENT_DATE
+                    AND btrim(name) <> ''
+                    AND upper(btrim(name)) <> 'EVENT CANCELLED'
+                ORDER BY date;
+                """
+                return await db_connection.execute_query(query, guild_id)
+
 # Singleton instance
 event_repository = EventRepository()

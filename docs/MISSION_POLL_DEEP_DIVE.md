@@ -55,6 +55,16 @@ Manually creates a poll.
 
 Same filtering/deduplication logic as `/missionpoll`, but posts a numbered embed instead of a live poll. Maximum 15 missions. Day-priority is not applied (fully random).
 
+### `/missionplayedcount` (admin or @Editor)
+
+Read-only reporting command that posts mission play counts for the selected framework/composition filter.
+
+It includes:
+- Every current briefing thread in the filter with total plays, last played date, post date, tags, and link.
+- A separate "No current briefing" section for historical mission names that did not match any current filtered thread.
+
+This command does not apply exclusion-weeks filtering.
+
 ### `/completepoll` (admin or @Editor)
 
 Manual completion fallback for `active` or `failed` polls. Useful when auto-completion fails (e.g. the poll message was deleted). Autocomplete shows status badges: 🟢 active, ⚠️ failed.
@@ -107,16 +117,20 @@ Forum tags are split into two categories using a regex match against `^Framework
 
 ## 5. Day-Priority Selection
 
-`select_with_day_priority(threads, count, day_tag)` is called after deduplication whenever the pool is larger than the requested option count.
+`select_with_day_priority(threads, count, day_tag, play_counts)` is called after deduplication whenever the pool is larger than the requested option count.
 
 ### How it works
 
 1. Threads are partitioned into two groups:
    - **Priority pool** — threads whose tag list contains `day_tag` (case-insensitive)
    - **Rest pool** — all other threads
-2. Both pools are independently shuffled.
-3. Slots are filled from the priority pool first (up to `count`).
-4. Any remaining slots are filled from the rest pool.
+2. Slots are filled from the priority pool first (up to `count`).
+3. Inside each pool, ranking is:
+   - lower play count first (`0` first)
+   - then day tag preference inside the rest pool (if applicable)
+   - then newer `thread.created_at` first
+   - then random shuffle only for exact ties
+4. Any remaining slots are filled from the rest pool using the same ranking.
 
 ```
 Example — 5 options requested, day_tag = "Thursday":
@@ -127,7 +141,7 @@ Rest pool (untagged/other-day):  [M4, M5, M6, M7] → fills 2 slots
 Result: [M1, M2, M3, M4, M5]
 ```
 
-If fewer than `count` threads carry the day tag, the fallback is seamless — the rest pool fills the gap. No error is raised. If no threads have the day tag at all, the result is identical to a uniform random shuffle.
+If fewer than `count` threads carry the day tag, the fallback is seamless — the rest pool fills the gap. No error is raised.
 
 ### For `/missionpoll`
 
@@ -140,7 +154,7 @@ The `day` parameter controls `effective_day`:
 | `"Sunday"` | Force Sunday-priority regardless of event date |
 | `"None"` | Disable day-priority entirely; uniform random selection |
 
-The user is notified via DM when random selection is applied, including a note about which day was prioritised.
+The user is notified via DM when ranked selection is applied, including a note about which day was prioritised.
 
 ### For auto-polls
 

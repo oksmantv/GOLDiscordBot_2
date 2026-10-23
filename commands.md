@@ -37,6 +37,7 @@ The GOL Discord Bot is an all-in-one management tool for a military simulation (
 | `/configureloa` | `channel` | Administrator | Setup |
 | `/configureroster` | `channel` | Administrator | Setup |
 | `/missionpoll` | `framework` · `event` · `duration`? · `options`? · `composition`? · `exclusion_weeks`? | Admin or @Editor | Mission Polls |
+| `/missionplayedcount` | `framework` · `composition`? | Admin or @Editor | Mission Polls |
 | `/cancelpoll` | `poll` | Admin or @Editor | Mission Polls |
 | `/loa` | `start_date` · `end_date` · `reason`? | @Member | LOA |
 | `/cancelloa` | `loa` | @Member | LOA |
@@ -293,7 +294,8 @@ Creates a Discord poll where members vote on which mission to play next. The bot
    - This prevents the same mission from being played repeatedly.
 
 4. **Selection:**
-   - If more missions pass the filter than the `options` count, a random subset is selected.
+   - If more missions pass the filter than the `options` count, ranked selection is used.
+   - Rank order: day-priority pool first, then fewer total historical plays, then newer briefing posts, then random tie-break.
    - If **0 missions** pass the filter → sends a warning DM to the caller and logs to the log channel. No poll is created.
    - If **only 1 mission** passes → sends an error DM. No poll is created (not enough for a vote).
 
@@ -312,6 +314,34 @@ Creates a Discord poll where members vote on which mission to play next. The bot
 - Event list cache: 30-second TTL.
 - Briefing channel cache: 5-minute TTL.
 - Forum tag cache: 24-hour TTL.
+
+---
+
+### `/missionplayedcount`
+
+**Category:** Mission Polling
+**Permission:** Administrator or `@Editor` role
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `framework` | string | ✅ | Framework version to filter briefings by (same autocomplete as `/missionpoll`) |
+| `composition` | string | ❌ | Composition type filter. Default: **"All"** |
+
+**What it does:**
+Posts a public report of mission play history for the selected briefing filter.
+
+**Logic:**
+1. Fetches all briefing threads from the configured briefing forum.
+2. Filters by framework and composition.
+3. Computes play counts from historical Mission events (past dates only).
+4. Matches history to threads with exact, normalized, and high-fuzzy acceptance.
+5. Keeps medium-fuzzy matches unattached for safety.
+6. Posts one or more embeds in-channel:
+   - Current briefings with link, total plays, last played, post date, and tags.
+   - Separate section for historical names with no current briefing.
+7. Sends an ephemeral confirmation to the command caller.
+
+No exclusion-weeks filter is applied in this command.
 
 ---
 
@@ -490,7 +520,7 @@ The bot runs several automated background tasks that operate independently of us
 | Task | Interval | Trigger |
 |------|----------|---------|
 | Event population maintenance | Every 12 hours | Automatic — maintains 8-week event lookahead |
-| Auto-poll | Every 1 minute (checks time) | Fires at **21:30 Swedish time** on Thursdays and Sundays only |
+| Auto-poll | Every 1 minute (checks time) | Fires at **21:00 Swedish time** on Thursdays and Sundays only |
 | Poll monitoring | Every 1 minute | Checks all active polls for expiry |
 | Automated feedback | Continuous check | Posts within 1 hour after event end time |
 | LOA expiry processing | On bot startup | Runs once per session; expires old LOAs, restores roles, sends DMs |
@@ -499,7 +529,7 @@ The bot runs several automated background tasks that operate independently of us
 
 ### Auto-Poll Details
 
-On **Thursdays at 21:30 Swedish time**, the bot automatically creates a mission poll targeting the **next Sunday** (today + 3 days). On **Sundays at 21:30**, it targets the **next Thursday** (today + 4 days).
+On **Thursdays at 21:00 Swedish time**, the bot automatically creates a mission poll targeting the **next Sunday** (today + 3 days). On **Sundays at 21:00**, it targets the **next Thursday** (today + 4 days).
 
 Auto-poll configuration (hardcoded):
 - **Framework filter:** "Framework 3.0"
@@ -512,6 +542,7 @@ Auto-poll configuration (hardcoded):
 - **0 missions found:** Sends a warning to the log channel, skips poll creation.
 - **1 mission found:** Skips the poll entirely and **auto-schedules** that mission directly — updates the event name, syncs to Raid-Helper, and posts an announcement.
 - **2+ missions:** Creates a standard Discord poll with `@Active` role mention.
+- **More than 5 missions:** Applies day-priority + play-count ranking before taking poll options.
 
 A deduplication set prevents the auto-poll from firing twice for the same (guild, event date) combination within one bot session.
 

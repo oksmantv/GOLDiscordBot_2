@@ -187,44 +187,68 @@ def select_with_day_priority(
     threads: list[discord.Thread],
     count: int,
     day_tag: Optional[str] = None,
+    play_counts: Optional[dict[int, int]] = None,
 ) -> tuple[list[discord.Thread], list[discord.Thread]]:
-    """Randomly select *count* threads, prioritising those tagged with *day_tag*.
+    """Select threads using day-priority, then lowest play count, then recency.
 
-    Priority logic:
-    - Threads whose tag list contains *day_tag* (case-insensitive) are placed
-      in the priority pool.
-    - The priority pool fills as many slots as possible (up to *count*).
-    - Any remaining slots are filled from the rest of the pool.
-    - Both pools are independently shuffled before selection.
-    - If *day_tag* is None, or no threads carry the tag, all threads are
-      shuffled uniformly (identical to the previous behaviour).
-
-    Returns:
-        (selected, excluded) — the chosen threads and the leftover threads.
+    Ranking inside each pool:
+    1) lower play count first
+    2) if in rest pool and day_tag exists, missions with day_tag first
+    3) newer thread.created_at first
+    4) random tie-break for exact ties
     """
     if len(threads) <= count:
         return list(threads), []
 
-    if not day_tag:
-        shuffled = list(threads)
-        random.shuffle(shuffled)
-        return shuffled[:count], shuffled[count:]
+    play_counts = play_counts or {}
+    day_lower = day_tag.lower() if day_tag else None
 
-    day_lower = day_tag.lower()
-    priority = [t for t in threads if day_lower in [tag.lower() for tag in get_thread_tags(t)]]
-    rest = [t for t in threads if t not in priority]
+    def has_day(thread: discord.Thread) -> bool:
+        if not day_lower:
+            return False
+        return day_lower in [tag.lower() for tag in get_thread_tags(thread)]
 
-    random.shuffle(priority)
-    random.shuffle(rest)
+    def created_ts(thread: discord.Thread) -> float:
+        if thread.created_at:
+            return thread.created_at.timestamp()
+        return 0.0
 
-    selected = priority[:count]
+    def rank_pool(pool: list[discord.Thread], prefer_day_tag_within_pool: bool) -> list[discord.Thread]:
+        grouped: dict[tuple, list[discord.Thread]] = {}
+        for thread in pool:
+            key = (
+                int(play_counts.get(thread.id, 0)),
+                0 if (prefer_day_tag_within_pool and has_day(thread)) else 1,
+                -created_ts(thread),
+            )
+            grouped.setdefault(key, []).append(thread)
+
+        ranked: list[discord.Thread] = []
+        for key in sorted(grouped.keys()):
+            tie_group = grouped[key]
+            random.shuffle(tie_group)
+            ranked.extend(tie_group)
+        return ranked
+
+    if day_lower:
+        priority = [thread for thread in threads if has_day(thread)]
+        rest = [thread for thread in threads if not has_day(thread)]
+    else:
+        priority = []
+        rest = list(threads)
+
+    selected: list[discord.Thread] = []
+    if priority:
+        ranked_priority = rank_pool(priority, prefer_day_tag_within_pool=False)
+        selected.extend(ranked_priority[:count])
+
     if len(selected) < count:
         needed = count - len(selected)
-        selected = selected + rest[:needed]
+        ranked_rest = rank_pool(rest, prefer_day_tag_within_pool=bool(day_lower))
+        selected.extend(ranked_rest[:needed])
 
-    selected_ids = {t.id for t in selected}
-    excluded = [t for t in threads if t.id not in selected_ids]
-
+    selected_ids = {thread.id for thread in selected}
+    excluded = [thread for thread in threads if thread.id not in selected_ids]
     return selected, excluded
 
 

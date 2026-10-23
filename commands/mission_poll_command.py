@@ -28,6 +28,7 @@ from services.mission_poll_service import (
     ordinal,
     MAX_POLL_OPTIONS,
 )
+from services.mission_play_count_service import mission_play_count_service
 from services.schedule_config_repository import schedule_config_repository
 from services.event_repository import event_repository
 from services.raid_helper_service import raid_helper_service
@@ -413,19 +414,27 @@ class MissionPollCommands(commands.Cog):
         # ── Random selection with optional day-priority ──
         excluded_from_poll = []
         if len(remaining) > options:
-            selected, excluded_from_poll = select_with_day_priority(remaining, options, effective_day)
+            play_data = await mission_play_count_service.get_play_data_for_threads(guild.id, remaining)
+            selected, excluded_from_poll = select_with_day_priority(
+                remaining,
+                options,
+                effective_day,
+                play_counts=play_data.thread_play_counts,
+            )
             remaining = selected
 
             # DM the user about excluded missions
             excluded_names = ", ".join(t.name for t in excluded_from_poll)
             day_note = f" (prioritised **{effective_day}**-tagged missions)" if effective_day else ""
             dm_embed = discord.Embed(
-                title="ℹ️ Mission Poll — Random Selection Applied",
+                title="ℹ️ Mission Poll — Ranked Selection Applied",
                 color=discord.Color.blue(),
                 description=(
                     f"**{len(excluded_from_poll) + options}** missions matched your filter, "
                     f"but you requested {options} options{day_note}.\n\n"
-                    f"**Randomly selected:** {options} missions\n"
+                    f"Selection priority: day tag, then fewer total plays, then newer briefing post, "
+                    f"with random only for exact ties.\n\n"
+                    f"**Selected:** {options} missions\n"
                     f"**Excluded:** {excluded_names}"
                 ),
             )
@@ -637,6 +646,170 @@ class MissionPollCommands(commands.Cog):
             f"✅ Mission list posted with {len(selected)} missions.", ephemeral=True
         )
 
+    @app_commands.guilds(Config.GUILD_ID)
+    @app_commands.command(
+        name="missionplayedcount",
+        description="Post mission play counts for the current framework/composition filters",
+    )
+    @app_commands.describe(
+        framework="Select the framework version to filter missions",
+        composition="Filter by composition type (default: All)",
+    )
+    async def missionplayedcount_command(
+        self,
+        interaction: discord.Interaction,
+        framework: str,
+        composition: str = "All",
+    ):
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message(
+                "❌ This command can only be used in a server.", ephemeral=True
+            )
+            return
+
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            member = await guild.fetch_member(interaction.user.id)
+        is_admin = any(getattr(r.permissions, "administrator", False) for r in member.roles)
+        has_editor = any(r.name.strip().lower() == "editor" for r in member.roles)
+        if not (is_admin or has_editor):
+            await interaction.response.send_message(
+                "❌ You must be an admin or have the @Editor role to use this command.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        briefing_channel_id = await self._get_briefing_channel_id(guild.id)
+        if not briefing_channel_id:
+            await interaction.followup.send(
+                "❌ No briefing forum channel configured. Use `/configure` first.",
+                ephemeral=True,
+            )
+            return
+
+        await forum_tag_service.ensure_cache(guild, briefing_channel_id)
+        all_threads = await fetch_all_forum_threads(guild, briefing_channel_id)
+        filtered_threads = filter_threads_by_tags(all_threads, framework, composition)
+
+        if not filtered_threads:
+            await interaction.followup.send(
+                "❌ No briefing threads matched that framework/composition filter.",
+                ephemeral=True,
+            )
+            return
+
+        play_data = await mission_play_count_service.get_play_data_for_threads(guild.id, filtered_threads)
+
+        def _created_ts(thread: discord.Thread) -> float:
+            if thread.created_at:
+                return thread.created_at.timestamp()
+            return 0.0
+
+        sorted_threads = sorted(
+            filtered_threads,
+            key=lambda thread: (
+                int(play_data.thread_play_counts.get(thread.id, 0)),
+                -_created_ts(thread),
+                thread.name.casefold(),
+            ),
+        )
+
+        thread_lines: list[str] = []
+        for thread in sorted_threads:
+            thread_url = f"https://discord.com/channels/{guild.id}/{thread.id}"
+            comp_tags = get_thread_composition_tags(thread)
+            tags_label = ", ".join(comp_tags) if comp_tags else "None"
+            plays = int(play_data.thread_play_counts.get(thread.id, 0))
+            last_played = play_data.thread_last_played.get(thread.id)
+            last_played_text = last_played.isoformat() if last_played else "Never"
+            post_date = thread.created_at.date().isoformat() if thread.created_at else "Unknown"
+            thread_lines.append(
+                f"• [{thread.name}]({thread_url}) | Plays: **{plays}** | "
+                f"Last played: {last_played_text} | Post date: {post_date} | Tags: {tags_label}"
+            )
+
+        history_lines: list[str] = []
+        for row in play_data.history_only:
+            last_played_text = row.last_played.isoformat() if row.last_played else "Unknown"
+            history_lines.append(
+                f"• {row.name} | Plays: **{row.play_count}** | Last played: {last_played_text}"
+            )
+
+        footer_text = (
+            f"{framework} • Composition: {composition} • Exclusion weeks not applied • "
+            f"{len(sorted_threads)} briefings • {len(play_data.history_only)} history-only names"
+        )
+
+        def _paginate(lines: list[str], heading: str, color: discord.Color) -> list[discord.Embed]:
+            if not lines:
+                embed = discord.Embed(
+                    title=heading,
+                    description="No rows.",
+                    color=color,
+                )
+                embed.set_footer(text=footer_text)
+                return [embed]
+
+            pages: list[discord.Embed] = []
+            chunk: list[str] = []
+            current_len = 0
+            max_len = 3800
+            for line in lines:
+                add_len = len(line) + 1
+                if chunk and current_len + add_len > max_len:
+                    embed = discord.Embed(
+                        title=heading,
+                        description="\n".join(chunk),
+                        color=color,
+                    )
+                    embed.set_footer(text=footer_text)
+                    pages.append(embed)
+                    chunk = [line]
+                    current_len = add_len
+                else:
+                    chunk.append(line)
+                    current_len += add_len
+
+            if chunk:
+                embed = discord.Embed(
+                    title=heading,
+                    description="\n".join(chunk),
+                    color=color,
+                )
+                embed.set_footer(text=footer_text)
+                pages.append(embed)
+
+            return pages
+
+        mission_pages = _paginate(
+            thread_lines,
+            heading="Mission Play Counts — Current Briefings",
+            color=discord.Color.teal(),
+        )
+        history_pages = _paginate(
+            history_lines,
+            heading="Mission Play Counts — No Current Briefing",
+            color=discord.Color.gold(),
+        )
+
+        first_message = None
+        for page in mission_pages + history_pages:
+            first_message = await interaction.channel.send(embed=page)
+
+        if first_message:
+            await interaction.followup.send(
+                f"✅ Posted mission play count report in {interaction.channel.mention}.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                "❌ Could not post mission play count report.",
+                ephemeral=True,
+            )
+
     # ─── Autocomplete: missionlist framework ────────────────────────────
     @missionlist_command.autocomplete("framework")
     async def missionlist_framework_autocomplete(
@@ -675,6 +848,44 @@ class MissionPollCommands(commands.Cog):
             return self._filter_composition_choices(current)
         except Exception as e:
             logger.error(f"Missionlist composition autocomplete error: {e}")
+            return self._filter_composition_choices(current)
+
+    @missionplayedcount_command.autocomplete("framework")
+    async def missionplayedcount_framework_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        try:
+            guild = interaction.guild
+            if not guild:
+                return []
+            if self._is_autocomplete_throttled(interaction.user.id):
+                return self._filter_framework_choices(current)
+            briefing_channel_id = await self._get_briefing_channel_id(guild.id, use_cache=True)
+            if not briefing_channel_id:
+                return [app_commands.Choice(name="⚠️ Run /configure first", value="NONE")]
+            await forum_tag_service.ensure_cache(guild, briefing_channel_id)
+            return self._filter_framework_choices(current)
+        except Exception as e:
+            logger.error(f"Missionplayedcount framework autocomplete error: {e}")
+            return self._filter_framework_choices(current)
+
+    @missionplayedcount_command.autocomplete("composition")
+    async def missionplayedcount_composition_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        try:
+            guild = interaction.guild
+            if not guild:
+                return []
+            if self._is_autocomplete_throttled(interaction.user.id):
+                return self._filter_composition_choices(current)
+            briefing_channel_id = await self._get_briefing_channel_id(guild.id, use_cache=True)
+            if not briefing_channel_id:
+                return [app_commands.Choice(name="⚠️ Run /configure first", value="NONE")]
+            await forum_tag_service.ensure_cache(guild, briefing_channel_id)
+            return self._filter_composition_choices(current)
+        except Exception as e:
+            logger.error(f"Missionplayedcount composition autocomplete error: {e}")
             return self._filter_composition_choices(current)
 
     # ─── Autocomplete: missionlist exclusion_weeks ──────────────────────
@@ -1094,10 +1305,16 @@ class MissionPollCommands(commands.Cog):
         # ── Multiple missions — create poll ──
         selected = remaining
         if len(remaining) > _AUTO_POLL_OPTIONS:
-            selected, _ = select_with_day_priority(remaining, _AUTO_POLL_OPTIONS, day_tag)
+            play_data = await mission_play_count_service.get_play_data_for_threads(guild.id, remaining)
+            selected, _ = select_with_day_priority(
+                remaining,
+                _AUTO_POLL_OPTIONS,
+                day_tag,
+                play_counts=play_data.thread_play_counts,
+            )
             if day_tag:
                 logger.info(
-                    "Auto-poll: day-priority '%s' applied — selected %d from %d missions",
+                    "Auto-poll: ranked day-priority '%s' applied — selected %d from %d missions",
                     day_tag, len(selected), len(remaining),
                 )
 

@@ -1,5 +1,6 @@
 # Add this file to .gitignore when uploading to public repository
 .env
+.env.example
 
 # Python
 __pycache__/
@@ -41,4 +42,3 @@ env/
 # OS
 .DS_Store
 Thumbs.db
-.env.example
