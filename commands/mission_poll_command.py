@@ -8,6 +8,7 @@ import re
 import time
 import logging
 import zoneinfo
+from collections import defaultdict
 
 from config import Config
 from services.forum_tag_service import forum_tag_service
@@ -966,6 +967,118 @@ class MissionPollCommands(commands.Cog):
                 "❌ Could not post mission play count report.",
                 ephemeral=True,
             )
+
+    @app_commands.guilds(Config.GUILD_ID)
+    @app_commands.command(
+        name="missioneditorcount",
+        description="Post mission counts grouped by editor",
+    )
+    async def missioneditorcount_command(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message(
+                "❌ This command can only be used in a server.", ephemeral=True
+            )
+            return
+
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            member = await guild.fetch_member(interaction.user.id)
+        is_admin = any(getattr(r.permissions, "administrator", False) for r in member.roles)
+        has_editor = any(r.name.strip().lower() == "editor" for r in member.roles)
+        if not (is_admin or has_editor):
+            await interaction.response.send_message(
+                "❌ You must be an admin or have the @Editor role to use this command.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        editors = [
+            m for m in guild.members
+            if any(r.name.strip().lower() == "editor" for r in getattr(m, "roles", []))
+        ]
+        if not editors:
+            await interaction.followup.send(
+                "❌ No members with the @Editor role were found.",
+                ephemeral=True,
+            )
+            return
+
+        events = await event_repository.get_all_events_by_guild(guild.id)
+
+        def _clean_name(value: str) -> str:
+            text = (value or "").casefold()
+            text = re.sub(r"<a?:\w+:\d+>", " ", text)
+            text = re.sub(r"[^a-z0-9\s]", " ", text)
+            text = re.sub(r"\b(editor|lt|1lt|2lt|sgt|cpt|capt|maj|cmdr|dr)\b", " ", text)
+            text = re.sub(r"\s+", " ", text).strip()
+            return text
+
+        editor_ids = {m.id for m in editors}
+        editor_name_index: dict[str, int] = {}
+        for m in editors:
+            candidates = [
+                m.display_name,
+                m.name,
+                getattr(m, "global_name", None) or "",
+                getattr(m, "nick", None) or "",
+            ]
+            for candidate in candidates:
+                cleaned = _clean_name(candidate)
+                if cleaned:
+                    editor_name_index[cleaned] = m.id
+
+        counts_by_editor: dict[int, int] = defaultdict(int)
+        unknown_creator_count = 0
+        mission_total = 0
+
+        for event in events:
+            if event.type != "Mission":
+                continue
+            if not (event.name or "").strip():
+                continue
+            if (event.name or "").strip().upper() == "EVENT CANCELLED":
+                continue
+
+            mission_total += 1
+
+            creator_id = int(getattr(event, "creator_id", 0) or 0)
+            if creator_id in editor_ids:
+                counts_by_editor[creator_id] += 1
+                continue
+
+            creator_name = _clean_name(getattr(event, "creator_name", ""))
+            matched_editor_id = editor_name_index.get(creator_name)
+            if matched_editor_id is not None:
+                counts_by_editor[matched_editor_id] += 1
+                continue
+
+            unknown_creator_count += 1
+
+        lines: list[str] = []
+        for m in sorted(editors, key=lambda e: (-counts_by_editor.get(e.id, 0), e.display_name.casefold())):
+            lines.append(f"• **{counts_by_editor.get(m.id, 0)}** — {m.mention}")
+
+        footer_text = (
+            f"Mission events counted: {mission_total} • "
+            f"Matched to editors: {sum(counts_by_editor.values())} • "
+            f"Unmatched creator rows: {unknown_creator_count}"
+        )
+
+        embed = discord.Embed(
+            title="Mission Counts by Editor",
+            description="\n".join(lines) if lines else "No rows.",
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(text=footer_text)
+
+        await interaction.channel.send(embed=embed)
+        await interaction.followup.send(
+            f"✅ Posted mission editor count report in {interaction.channel.mention}.",
+            ephemeral=True,
+        )
 
     @app_commands.guilds(Config.GUILD_ID)
     @app_commands.command(
