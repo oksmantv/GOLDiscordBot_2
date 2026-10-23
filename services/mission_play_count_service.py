@@ -14,6 +14,31 @@ _HISTORY_EXCLUDE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_CANCELLED_VARIANT_PATTERN = re.compile(
+    r"\b(cancelled|canceled)\b",
+    re.IGNORECASE,
+)
+
+_REPLAY_PREFIX_PATTERN = re.compile(
+    r"^\s*replay\s*[-:]\s*",
+    re.IGNORECASE,
+)
+
+_UNPLAYED_SUFFIX_PATTERN = re.compile(
+    r"\s*\[\s*unplayed\s*\]\s*$",
+    re.IGNORECASE,
+)
+
+_TBA_VARIANT_PATTERN = re.compile(
+    r"^\s*tb[ad]\s*$",
+    re.IGNORECASE,
+)
+
+_DAY_TRAINING_WRAPPER_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:thursday|sunday)\s+(?:training\s*&\s*mission|training\s+and\s+mission)\s*-\s*",
+    re.IGNORECASE,
+)
+
 
 @dataclass
 class MissionHistoryEntry:
@@ -76,10 +101,24 @@ def should_count_history_name(name: str) -> bool:
     if upper == "EVENT CANCELLED":
         return False
 
+    if _TBA_VARIANT_PATTERN.match(stripped):
+        return False
+
+    if _CANCELLED_VARIANT_PATTERN.search(stripped):
+        return False
+
     if _HISTORY_EXCLUDE_PATTERN.search(stripped):
         return False
 
     return True
+
+
+def canonicalize_history_name(name: str) -> str:
+    value = (name or "").strip()
+    value = _REPLAY_PREFIX_PATTERN.sub("", value)
+    value = _UNPLAYED_SUFFIX_PATTERN.sub("", value)
+    value = _DAY_TRAINING_WRAPPER_PREFIX_PATTERN.sub("", value)
+    return value.strip()
 
 
 def _similarity(a: str, b: str) -> float:
@@ -112,10 +151,10 @@ def compute_play_data_for_threads(
         if entry.played_on >= date.today():
             continue
 
-        if not should_count_history_name(entry.name):
+        raw_name = canonicalize_history_name(entry.name)
+        if not should_count_history_name(raw_name):
             continue
 
-        raw_name = entry.name.strip()
         history_exact = raw_name.casefold()
         history_normalized = normalize_mission_title(raw_name, strip_event_wrapper=True)
 

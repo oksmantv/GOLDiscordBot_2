@@ -9,6 +9,8 @@ from services.mission_play_count_service import (
     MissionHistoryEntry,
     compute_play_data_for_threads,
     MissionPlayCountService,
+    canonicalize_history_name,
+    should_count_history_name,
 )
 from services.mission_poll_service import select_with_day_priority
 from services import mission_poll_service
@@ -117,6 +119,19 @@ class MissionSelectionAndPlayCountTests(unittest.TestCase):
         self.assertEqual(data.thread_play_counts[1], 0)
         self.assertEqual(len(data.history_only), 1)
         self.assertEqual(data.history_only[0].name, "Operation Jungle Wind")
+
+    def test_cancelled_and_tba_variants_are_not_counted(self):
+        self.assertFalse(should_count_history_name("Cancelled"))
+        self.assertFalse(should_count_history_name("Cancelled Mission"))
+        self.assertFalse(should_count_history_name("Mission canceled"))
+        self.assertFalse(should_count_history_name("TBA"))
+
+    def test_replay_prefix_and_unplayed_suffix_are_normalized(self):
+        self.assertEqual(canonicalize_history_name("Replay - Tiny Steel"), "Tiny Steel")
+        self.assertEqual(
+            canonicalize_history_name("Operation Petrakivskyi [UNPLAYED]"),
+            "Operation Petrakivskyi",
+        )
 
     def test_exclusion_weeks_gate_stays_exact_match(self):
         exact_thread = _Thread(10, "Operation Iron Dawn", ["Sunday"], self.now)

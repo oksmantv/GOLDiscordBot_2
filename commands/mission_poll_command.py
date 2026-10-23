@@ -28,7 +28,8 @@ from services.mission_poll_service import (
     ordinal,
     MAX_POLL_OPTIONS,
 )
-from services.mission_play_count_service import mission_play_count_service
+from services.mission_play_count_service import mission_play_count_service, normalize_mission_title
+from services.training_play_count_service import training_play_count_service
 from services.schedule_config_repository import schedule_config_repository
 from services.event_repository import event_repository
 from services.raid_helper_service import raid_helper_service
@@ -703,6 +704,14 @@ class MissionPollCommands(commands.Cog):
 
         play_data = await mission_play_count_service.get_play_data_for_threads(guild.id, filtered_threads)
 
+        # Build a lookup over all briefing threads so history-only rows can hint
+        # when a thread exists outside the current framework/composition filter.
+        all_thread_norm_index: dict[str, discord.Thread] = {}
+        for thread in all_threads:
+            key = normalize_mission_title(thread.name or "")
+            if key:
+                all_thread_norm_index[key] = thread
+
         def _created_ts(thread: discord.Thread) -> float:
             if thread.created_at:
                 return thread.created_at.timestamp()
@@ -727,15 +736,23 @@ class MissionPollCommands(commands.Cog):
             last_played_text = last_played.isoformat() if last_played else "Never"
             post_date = thread.created_at.date().isoformat() if thread.created_at else "Unknown"
             thread_lines.append(
-                f"• [{thread.name}]({thread_url}) | Plays: **{plays}** | "
-                f"Last played: {last_played_text} | Post date: {post_date} | Tags: {tags_label}"
+                f"• [{thread.name}]({thread_url})\n"
+                f"  Plays: **{plays}** | Last played: {last_played_text} | "
+                f"Post date: {post_date} | Tags: {tags_label}"
             )
 
         history_lines: list[str] = []
         for row in play_data.history_only:
             last_played_text = row.last_played.isoformat() if row.last_played else "Unknown"
+            normalized_name = normalize_mission_title(row.name)
+            outside_filter_thread = all_thread_norm_index.get(normalized_name)
+            link_hint = ""
+            if outside_filter_thread and all(t.id != outside_filter_thread.id for t in filtered_threads):
+                outside_url = f"https://discord.com/channels/{guild.id}/{outside_filter_thread.id}"
+                link_hint = f" | Briefing outside filter: [link]({outside_url})"
             history_lines.append(
-                f"• {row.name} | Plays: **{row.play_count}** | Last played: {last_played_text}"
+                f"• {row.name}\n"
+                f"  Plays: **{row.play_count}** | Last played: {last_played_text}{link_hint}"
             )
 
         footer_text = (
@@ -807,6 +824,104 @@ class MissionPollCommands(commands.Cog):
         else:
             await interaction.followup.send(
                 "❌ Could not post mission play count report.",
+                ephemeral=True,
+            )
+
+    @app_commands.guilds(Config.GUILD_ID)
+    @app_commands.command(
+        name="trainingplayedcount",
+        description="Post historical training play counts",
+    )
+    async def trainingplayedcount_command(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message(
+                "❌ This command can only be used in a server.", ephemeral=True
+            )
+            return
+
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            member = await guild.fetch_member(interaction.user.id)
+        is_admin = any(getattr(r.permissions, "administrator", False) for r in member.roles)
+        has_editor = any(r.name.strip().lower() == "editor" for r in member.roles)
+        if not (is_admin or has_editor):
+            await interaction.response.send_message(
+                "❌ You must be an admin or have the @Editor role to use this command.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        rows = await training_play_count_service.get_training_rows(guild.id)
+        if not rows:
+            await interaction.followup.send(
+                "ℹ️ No historical training entries found.",
+                ephemeral=True,
+            )
+            return
+
+        lines: list[str] = []
+        for row in rows:
+            lines.append(
+                f"• {row.name}\n"
+                f"  Plays: **{row.play_count}** | Last played: {row.last_played.isoformat()}"
+            )
+
+        footer_text = f"Training history • {len(rows)} unique entries"
+
+        def _paginate(lines_to_page: list[str], heading: str, color: discord.Color) -> list[discord.Embed]:
+            pages: list[discord.Embed] = []
+            chunk: list[str] = []
+            current_len = 0
+            max_len = 3800
+
+            for line in lines_to_page:
+                add_len = len(line) + 1
+                if chunk and current_len + add_len > max_len:
+                    embed = discord.Embed(
+                        title=heading,
+                        description="\n".join(chunk),
+                        color=color,
+                    )
+                    embed.set_footer(text=footer_text)
+                    pages.append(embed)
+                    chunk = [line]
+                    current_len = add_len
+                else:
+                    chunk.append(line)
+                    current_len += add_len
+
+            if chunk:
+                embed = discord.Embed(
+                    title=heading,
+                    description="\n".join(chunk),
+                    color=color,
+                )
+                embed.set_footer(text=footer_text)
+                pages.append(embed)
+
+            return pages
+
+        pages = _paginate(
+            lines,
+            heading="Training Play Counts",
+            color=discord.Color.orange(),
+        )
+
+        first_message = None
+        for page in pages:
+            first_message = await interaction.channel.send(embed=page)
+
+        if first_message:
+            await interaction.followup.send(
+                f"✅ Posted training play count report in {interaction.channel.mention}.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                "❌ Could not post training play count report.",
                 ephemeral=True,
             )
 

@@ -168,5 +168,19 @@ class EventRepository:
                 """
                 return await db_connection.execute_query(query, guild_id)
 
+        async def get_past_training_history(self, guild_id: int) -> list:
+                """Get all historical training names used for play-count calculations."""
+                query = """
+                SELECT name, date
+                FROM events
+                WHERE guild_id = $1
+                    AND type = 'Training'
+                    AND date < CURRENT_DATE
+                    AND btrim(name) <> ''
+                    AND upper(btrim(name)) <> 'EVENT CANCELLED'
+                ORDER BY date;
+                """
+                return await db_connection.execute_query(query, guild_id)
+
 # Singleton instance
 event_repository = EventRepository()

@@ -38,6 +38,7 @@ The GOL Discord Bot is an all-in-one management tool for a military simulation (
 | `/configureroster` | `channel` | Administrator | Setup |
 | `/missionpoll` | `framework` · `event` · `duration`? · `options`? · `composition`? · `exclusion_weeks`? | Admin or @Editor | Mission Polls |
 | `/missionplayedcount` | `framework` · `composition`? | Admin or @Editor | Mission Polls |
+| `/trainingplayedcount` | — | Admin or @Editor | Mission Polls |
 | `/cancelpoll` | `poll` | Admin or @Editor | Mission Polls |
 | `/loa` | `start_date` · `end_date` · `reason`? | @Member | LOA |
 | `/cancelloa` | `loa` | @Member | LOA |
@@ -342,6 +343,26 @@ Posts a public report of mission play history for the selected briefing filter.
 7. Sends an ephemeral confirmation to the command caller.
 
 No exclusion-weeks filter is applied in this command.
+
+---
+
+### `/trainingplayedcount`
+
+**Category:** Mission Polling
+**Permission:** Administrator or `@Editor` role
+
+**Parameters:** None
+
+**What it does:**
+Posts a public report of historical Training event names and play counts.
+
+**Logic:**
+1. Reads historical `Training` events from the database (past dates only).
+2. Excludes cancelled and placeholder rows (for example `EVENT CANCELLED`, `Cancelled`, `TBA`).
+3. Normalizes replay prefixes (`Replay - ...`) to aggregate under the base training name.
+4. Posts one or more embeds sorted by highest play count, then most recent date.
+
+This command is independent from mission counting and is intended for training-only history.
 
 ---
 
