@@ -1016,29 +1016,14 @@ class MissionPollCommands(commands.Cog):
             return text
 
         editor_ids = {m.id for m in editors}
-        alias_to_editor_ids: dict[str, set[int]] = defaultdict(set)
-        for m in editors:
-            candidates = [
-                m.display_name,
-                m.name,
-                getattr(m, "global_name", None) or "",
-                getattr(m, "nick", None) or "",
-            ]
-            for candidate in candidates:
-                cleaned = _clean_name(candidate)
-                if cleaned and len(cleaned) >= 3:
-                    alias_to_editor_ids[cleaned].add(m.id)
-
-        # Only permit fallback attribution when an alias maps to exactly one editor.
-        unique_editor_aliases: dict[str, int] = {
-            alias: next(iter(member_ids))
-            for alias, member_ids in alias_to_editor_ids.items()
-            if len(member_ids) == 1
-        }
 
         counts_by_editor: dict[int, int] = defaultdict(int)
         unknown_creator_count = 0
+        direct_id_matches = 0
+        alias_fallback_matches = 0
         mission_total = 0
+        unresolved_rows: list[tuple[int, str]] = []
+        verified_alias_to_editor_ids: dict[str, set[int]] = defaultdict(set)
 
         for event in events:
             if event.type != "Mission":
@@ -1051,14 +1036,34 @@ class MissionPollCommands(commands.Cog):
             mission_total += 1
 
             creator_id = int(getattr(event, "creator_id", 0) or 0)
+            creator_name = _clean_name(getattr(event, "creator_name", ""))
+
             if creator_id in editor_ids:
                 counts_by_editor[creator_id] += 1
+                direct_id_matches += 1
+                if creator_name and len(creator_name) >= 3:
+                    verified_alias_to_editor_ids[creator_name].add(creator_id)
                 continue
 
-            creator_name = _clean_name(getattr(event, "creator_name", ""))
-            matched_editor_id = unique_editor_aliases.get(creator_name)
+            unresolved_rows.append((creator_id, creator_name))
+
+        # Fallback name attribution is only allowed for aliases observed on rows
+        # that already had a direct editor-ID match.
+        unique_verified_aliases: dict[str, int] = {
+            alias: next(iter(member_ids))
+            for alias, member_ids in verified_alias_to_editor_ids.items()
+            if len(member_ids) == 1
+        }
+
+        for creator_id, creator_name in unresolved_rows:
+            if creator_id != 0:
+                unknown_creator_count += 1
+                continue
+
+            matched_editor_id = unique_verified_aliases.get(creator_name)
             if matched_editor_id is not None:
                 counts_by_editor[matched_editor_id] += 1
+                alias_fallback_matches += 1
                 continue
 
             unknown_creator_count += 1
@@ -1072,6 +1077,8 @@ class MissionPollCommands(commands.Cog):
         footer_text = (
             f"Mission events counted: {mission_total} • "
             f"Matched to editors: {sum(counts_by_editor.values())} • "
+            f"Direct ID matches: {direct_id_matches} • "
+            f"Alias fallback matches: {alias_fallback_matches} • "
             f"Unmatched creator rows: {unknown_creator_count} • "
             f"Editors shown: {len(editors_with_counts)}/{len(editors)}"
         )
