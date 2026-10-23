@@ -68,6 +68,82 @@ _BRIEFING_CACHE_TTL = 300.0            # 5 min TTL for briefing-channel-id cache
 _EVENT_CACHE_TTL = 30.0                # 30 s TTL for unassigned-events cache
 
 
+class EmbedPaginationView(discord.ui.View):
+    """Simple button-based embed paginator for channel reports."""
+
+    def __init__(
+        self,
+        pages: list[discord.Embed],
+        owner_id: int,
+        *,
+        timeout: float = 300.0,
+    ):
+        super().__init__(timeout=timeout)
+        self.pages = pages
+        self.owner_id = owner_id
+        self.index = 0
+        self.message: Optional[discord.Message] = None
+        self._sync_button_state()
+
+    def _sync_button_state(self):
+        total = len(self.pages)
+        at_first = self.index <= 0
+        at_last = self.index >= (total - 1)
+
+        self.prev_button.disabled = at_first or total <= 1
+        self.next_button.disabled = at_last or total <= 1
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        user = interaction.user
+        if user.id == self.owner_id:
+            return True
+
+        member = user if isinstance(user, discord.Member) else None
+        if member:
+            is_admin = any(getattr(r.permissions, "administrator", False) for r in member.roles)
+            has_editor = any(r.name.strip().lower() == "editor" for r in member.roles)
+            if is_admin or has_editor:
+                return True
+
+        await interaction.response.send_message(
+            "Only the command invoker (or admin/editor) can use these pagination buttons.",
+            ephemeral=True,
+        )
+        return False
+
+    async def on_timeout(self):
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception as e:
+                logger.debug(f"Could not disable paginator buttons after timeout: {e}")
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.index > 0:
+            self.index -= 1
+        self._sync_button_state()
+        await interaction.response.edit_message(embed=self.pages[self.index], view=self)
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.primary)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.index < len(self.pages) - 1:
+            self.index += 1
+        self._sync_button_state()
+        await interaction.response.edit_message(embed=self.pages[self.index], view=self)
+
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger)
+    async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+
 class MissionPollCommands(commands.Cog):
     """Cog for the /missionpoll command and poll monitoring background task."""
 
@@ -871,9 +947,14 @@ class MissionPollCommands(commands.Cog):
             color=discord.Color.dark_gold(),
         )
 
-        first_message = None
-        for page in mission_pages + history_without_briefing_pages:
-            first_message = await interaction.channel.send(embed=page)
+        pages = mission_pages + history_without_briefing_pages
+        total_pages = len(pages)
+        for idx, page in enumerate(pages, start=1):
+            page.set_footer(text=f"{footer_text} • Page {idx}/{total_pages}")
+
+        view = EmbedPaginationView(pages, owner_id=interaction.user.id)
+        first_message = await interaction.channel.send(embed=pages[0], view=view)
+        view.message = first_message
 
         if first_message:
             await interaction.followup.send(

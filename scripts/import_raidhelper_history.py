@@ -68,6 +68,7 @@ class ReviewRow:
     source_date: str
     source_creator: str
     source_link: str
+    source_description_preview: str
     proposed_mission_name: str
     proposed_event_type: str
     proposed_weekday_slot: str
@@ -82,9 +83,47 @@ MISSION_NAME_RE = re.compile(
     r"^\s*(?:\*\*\s*)?Mission\s*Name\s*:?\s*(?:\*\*\s*)?(.*?)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+MISSION_NAME_ANYWHERE_RE = re.compile(
+    r"Mission\s*Name\s*:\s*([^\n\r]+)",
+    re.IGNORECASE,
+)
+NAME_RE = re.compile(
+    r"^\s*(?:\*\*\s*)?Name\s*:\s*(?:\*\*\s*)?(.*?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 MISSION_RE = re.compile(
     r"^\s*(?:\*\*\s*)?Mission\s*(?::|-)+\s*(?:\*\*\s*)?(.*?)\s*$",
     re.IGNORECASE | re.MULTILINE,
+)
+MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(https?://(?:discord(?:app)?\.com)/channels/[^\)]+\)", re.IGNORECASE)
+MARKDOWN_EMOJI_RE = re.compile(r"!\[:[^\]]+\]\([^\)]+\)", re.IGNORECASE)
+DISCORD_EMOJI_TAG_RE = re.compile(r"<a?:[^:>]+:\d+>", re.IGNORECASE)
+DISCORD_URL_RE = re.compile(r"https?://(?:discord(?:app)?\.com)/channels/\d+/\d+/\d+", re.IGNORECASE)
+
+CANCELLED_MARKERS = (
+    "event cancelled",
+    "cancelled",
+)
+
+NON_MISSION_HEADING_PREFIXES = (
+    "terrain:",
+    "created by:",
+    "author:",
+    "faction:",
+    "enemy:",
+    "composition:",
+    "time:",
+    "daytime:",
+    "weather:",
+    "weapons:",
+    "logistics:",
+    "day:",
+    "session:",
+    "required players:",
+    "notes:",
+    "situation report",
+    "objectives",
+    "operational threats",
 )
 
 
@@ -93,6 +132,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=["parse", "backup", "apply"], default="parse")
     parser.add_argument("--input", required=True, help="Path to Raid-Helper export CSV")
     parser.add_argument("--output", help="Path for generated review CSV")
+    parser.add_argument("--human-output", help="Path for human-only review CSV (review rows only)")
     parser.add_argument("--today", help="Override today's date (YYYY-MM-DD)")
     return parser.parse_args()
 
@@ -145,6 +185,23 @@ def parse_event_block(block: str) -> SourceEvent | None:
     )
 
 
+def extract_clickable_discord_url(*texts: str) -> str:
+    for text in texts:
+        if not text:
+            continue
+        match = DISCORD_URL_RE.search(text)
+        if match:
+            return match.group(0).replace("discordapp.com", "discord.com")
+    return ""
+
+
+def description_preview(description: str, max_len: int = 380) -> str:
+    collapsed = " ".join(description.split())
+    if len(collapsed) <= max_len:
+        return collapsed
+    return collapsed[: max_len - 3] + "..."
+
+
 def parse_source_date(raw_date: str) -> date | None:
     try:
         return datetime.strptime(raw_date, "%d-%m-%Y").date()
@@ -169,22 +226,40 @@ def extract_from_description(description: str) -> str:
     if match:
         return clean_candidate(match.group(1))
 
+    anywhere_match = MISSION_NAME_ANYWHERE_RE.search(description)
+    if anywhere_match:
+        candidate = clean_candidate(anywhere_match.group(1))
+        if candidate:
+            return candidate
+
+    name_match = NAME_RE.search(description)
+    if name_match:
+        candidate = clean_candidate(name_match.group(1))
+        if candidate:
+            return candidate
+
     legacy_match = MISSION_RE.search(description)
-    if not legacy_match:
-        return ""
+    if legacy_match:
+        candidate = clean_candidate(legacy_match.group(1))
+        if candidate:
+            # Avoid false positives like "Mission settings will test:".
+            lowered = candidate.lower()
+            if not lowered.startswith("settings"):
+                return candidate
 
-    candidate = clean_candidate(legacy_match.group(1))
-    if not candidate:
-        return ""
+    markdown_candidate = extract_from_markdown_link(description)
+    if markdown_candidate:
+        return markdown_candidate
 
-    # Avoid false positives like "Mission settings will test:".
-    lowered = candidate.lower()
-    if lowered.startswith("settings"):
-        return ""
+    heading_candidate = extract_from_operation_heading(description)
+    if heading_candidate:
+        return heading_candidate
 
-    # Common old format: "Threading Needle by Oksman" -> keep mission name only.
-    candidate = re.sub(r"\s+by\s+.+$", "", candidate, flags=re.IGNORECASE).strip()
-    return candidate
+    terrain_candidate = extract_from_pre_terrain_heading(description)
+    if terrain_candidate:
+        return terrain_candidate
+
+    return ""
 
 
 def extract_from_title(title: str) -> str:
@@ -202,20 +277,126 @@ def extract_from_title(title: str) -> str:
 
 def clean_candidate(value: str) -> str:
     # Keep sequel markers; strip wrappers and accidental markdown/punctuation noise.
+    value = MARKDOWN_EMOJI_RE.sub("", value)
+    value = DISCORD_EMOJI_TAG_RE.sub("", value)
     value = value.strip().strip("*").strip()
+    value = value.lstrip("#").strip()
     value = re.sub(r"^DCO(?:@\d+)?\s+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^Mission\s*[:\-]\s*", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s+by\s+.+$", "", value, flags=re.IGNORECASE)
     value = re.sub(r"\s+", " ", value)
     return value
 
 
+def contains_cancelled_marker(value: str) -> bool:
+    lowered = value.lower()
+    return any(marker in lowered for marker in CANCELLED_MARKERS)
+
+
+def extract_from_markdown_link(description: str) -> str:
+    for raw in MARKDOWN_LINK_RE.findall(description):
+        candidate = clean_candidate(raw)
+        if not candidate:
+            continue
+        lowered = candidate.lower()
+        if lowered in {"mission", "whiteboard_ca"}:
+            continue
+        return candidate
+    return ""
+
+
+def extract_from_operation_heading(description: str) -> str:
+    for line in description.splitlines():
+        cleaned = MARKDOWN_EMOJI_RE.sub("", line)
+        cleaned = DISCORD_EMOJI_TAG_RE.sub("", cleaned)
+        cleaned = cleaned.replace("*", "")
+        cleaned = cleaned.lstrip("#").strip()
+        if not cleaned:
+            continue
+
+        match = re.search(r"\bOperation\s+.+$", cleaned, flags=re.IGNORECASE)
+        if match:
+            return clean_candidate(match.group(0))
+
+        mission_match = re.search(r"\bMission\s*[:\-]\s*.+$", cleaned, flags=re.IGNORECASE)
+        if mission_match:
+            return clean_candidate(mission_match.group(0))
+
+        if line.lstrip().startswith("#"):
+            lowered = cleaned.lower()
+            if lowered and not lowered.startswith(NON_MISSION_HEADING_PREFIXES):
+                if "http" not in lowered and len(cleaned) >= 4:
+                    return clean_candidate(cleaned)
+    return ""
+
+
+def extract_from_pre_terrain_heading(description: str) -> str:
+    """Use the nearest heading/text line before Terrain as a fallback mission name."""
+    lines = description.splitlines()
+    terrain_idx = -1
+    for i, line in enumerate(lines):
+        cleaned = clean_candidate(line)
+        if cleaned.lower().startswith("terrain:"):
+            terrain_idx = i
+            break
+
+    if terrain_idx <= 0:
+        return ""
+
+    skip_prefixes = (
+        "training:",
+        "session:",
+        "day:",
+        "time:",
+        "daytime:",
+        "weather:",
+        "weapons:",
+        "logistics:",
+        "composition:",
+        "faction:",
+        "enemy:",
+        "created by:",
+        "author:",
+        "briefing:",
+        "notes:",
+    )
+
+    for j in range(terrain_idx - 1, max(-1, terrain_idx - 6), -1):
+        raw = lines[j].strip()
+        if not raw or raw == "-- start --" or raw == "-- end --":
+            continue
+
+        cleaned = clean_candidate(raw)
+        lowered = cleaned.lower()
+        if not cleaned:
+            continue
+        if lowered.startswith(skip_prefixes):
+            continue
+        if lowered in {"mission", "training"}:
+            continue
+        if lowered.startswith("#"):
+            cleaned = cleaned.lstrip("#").strip()
+            lowered = cleaned.lower()
+        if lowered.startswith("mission:"):
+            cleaned = clean_candidate(cleaned)
+            lowered = cleaned.lower()
+        if lowered.startswith("operation ") or len(cleaned) >= 4:
+            return cleaned
+
+    return ""
+
+
 def to_review_row(event: SourceEvent, today: date) -> ReviewRow:
     parsed_date = parse_source_date(event.source_date)
+    clean_link = extract_clickable_discord_url(event.link, event.description)
+    preview = description_preview(event.description)
     if not parsed_date:
         return ReviewRow(
             source_title=event.title,
             source_date=event.source_date,
             source_creator=event.creator,
-            source_link=event.link,
+            source_link=clean_link,
+            source_description_preview=preview,
             proposed_mission_name="",
             proposed_event_type="",
             proposed_weekday_slot="",
@@ -239,7 +420,8 @@ def to_review_row(event: SourceEvent, today: date) -> ReviewRow:
             source_title=event.title,
             source_date=event.source_date,
             source_creator=event.creator,
-            source_link=event.link,
+            source_link=clean_link,
+            source_description_preview=preview,
             proposed_mission_name="",
             proposed_event_type="",
             proposed_weekday_slot=weekday_slot,
@@ -255,7 +437,8 @@ def to_review_row(event: SourceEvent, today: date) -> ReviewRow:
             source_title=event.title,
             source_date=event.source_date,
             source_creator=event.creator,
-            source_link=event.link,
+            source_link=clean_link,
+            source_description_preview=preview,
             proposed_mission_name="",
             proposed_event_type="",
             proposed_weekday_slot=weekday_slot,
@@ -271,7 +454,8 @@ def to_review_row(event: SourceEvent, today: date) -> ReviewRow:
             source_title=event.title,
             source_date=event.source_date,
             source_creator=event.creator,
-            source_link=event.link,
+            source_link=clean_link,
+            source_description_preview=preview,
             proposed_mission_name=description_candidate or title_candidate,
             proposed_event_type="",
             proposed_weekday_slot=weekday_slot,
@@ -287,7 +471,8 @@ def to_review_row(event: SourceEvent, today: date) -> ReviewRow:
             source_title=event.title,
             source_date=event.source_date,
             source_creator=event.creator,
-            source_link=event.link,
+            source_link=clean_link,
+            source_description_preview=preview,
             proposed_mission_name=description_candidate or title_candidate,
             proposed_event_type="",
             proposed_weekday_slot="",
@@ -299,11 +484,28 @@ def to_review_row(event: SourceEvent, today: date) -> ReviewRow:
         )
 
     if description_candidate:
+        if contains_cancelled_marker(description_candidate):
+            return ReviewRow(
+                source_title=event.title,
+                source_date=event.source_date,
+                source_creator=event.creator,
+                source_link=clean_link,
+                source_description_preview=preview,
+                proposed_mission_name="",
+                proposed_event_type="",
+                proposed_weekday_slot=weekday_slot,
+                confidence="skip",
+                rule_fired="cancelled-filter",
+                skip_reason_or_notes="Extracted mission indicates cancelled event",
+                user_decision="",
+                corrected_name="",
+            )
         return ReviewRow(
             source_title=event.title,
             source_date=event.source_date,
             source_creator=event.creator,
-            source_link=event.link,
+            source_link=clean_link,
+            source_description_preview=preview,
             proposed_mission_name=description_candidate,
             proposed_event_type="Mission",
             proposed_weekday_slot=weekday_slot,
@@ -315,11 +517,28 @@ def to_review_row(event: SourceEvent, today: date) -> ReviewRow:
         )
 
     if title_candidate:
+        if contains_cancelled_marker(title_candidate):
+            return ReviewRow(
+                source_title=event.title,
+                source_date=event.source_date,
+                source_creator=event.creator,
+                source_link=clean_link,
+                source_description_preview=preview,
+                proposed_mission_name="",
+                proposed_event_type="",
+                proposed_weekday_slot=weekday_slot,
+                confidence="skip",
+                rule_fired="cancelled-filter",
+                skip_reason_or_notes="Title candidate indicates cancelled event",
+                user_decision="",
+                corrected_name="",
+            )
         return ReviewRow(
             source_title=event.title,
             source_date=event.source_date,
             source_creator=event.creator,
-            source_link=event.link,
+            source_link=clean_link,
+            source_description_preview=preview,
             proposed_mission_name=title_candidate,
             proposed_event_type="Mission",
             proposed_weekday_slot=weekday_slot,
@@ -334,7 +553,8 @@ def to_review_row(event: SourceEvent, today: date) -> ReviewRow:
         source_title=event.title,
         source_date=event.source_date,
         source_creator=event.creator,
-        source_link=event.link,
+        source_link=clean_link,
+        source_description_preview=preview,
         proposed_mission_name="",
         proposed_event_type="",
         proposed_weekday_slot=weekday_slot,
@@ -357,6 +577,11 @@ def filter_rows_for_clean_review(rows: Iterable[ReviewRow]) -> list[ReviewRow]:
     return [row for row in rows if row.confidence != "skip"]
 
 
+def filter_rows_for_human_review(rows: Iterable[ReviewRow]) -> list[ReviewRow]:
+    # Human-eye pass should only include rows that still need a decision.
+    return [row for row in rows if row.confidence == "review"]
+
+
 def write_review_csv(output_path: Path, rows: list[ReviewRow]) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
@@ -364,6 +589,7 @@ def write_review_csv(output_path: Path, rows: list[ReviewRow]) -> None:
         "source_date",
         "source_creator",
         "source_link",
+        "source_description_preview",
         "proposed_mission_name",
         "proposed_event_type",
         "proposed_weekday_slot",
@@ -385,7 +611,11 @@ def default_output_path() -> Path:
     return Path("downloads") / f"raidhelper_review_{ts}.csv"
 
 
-def run_parse_mode(input_path: Path, output_path: Path, today: date) -> int:
+def default_human_output_path(output_path: Path) -> Path:
+    return output_path.with_name(output_path.stem + "_human_review.csv")
+
+
+def run_parse_mode(input_path: Path, output_path: Path, human_output_path: Path, today: date) -> int:
     raw = input_path.read_text(encoding="utf-8")
     blocks = extract_blocks(raw)
 
@@ -397,7 +627,9 @@ def run_parse_mode(input_path: Path, output_path: Path, today: date) -> int:
 
     rows = review_rows_from_events(events, today)
     clean_rows = filter_rows_for_clean_review(rows)
+    human_rows = filter_rows_for_human_review(clean_rows)
     write_review_csv(output_path, clean_rows)
+    write_review_csv(human_output_path, human_rows)
 
     by_confidence: dict[str, int] = {"high": 0, "review": 0, "skip": 0}
     for row in rows:
@@ -406,6 +638,7 @@ def run_parse_mode(input_path: Path, output_path: Path, today: date) -> int:
     print(f"Parsed blocks: {len(blocks)}")
     print(f"Parsed events: {len(events)}")
     print(f"Review rows written (clean, in-scope): {len(clean_rows)}")
+    print(f"Human-review rows written: {len(human_rows)}")
     print(f"Discarded rows: {len(rows) - len(clean_rows)}")
     print(
         "Confidence counts: "
@@ -414,6 +647,7 @@ def run_parse_mode(input_path: Path, output_path: Path, today: date) -> int:
         f"skip={by_confidence.get('skip', 0)}"
     )
     print(f"Review CSV: {output_path}")
+    print(f"Human review CSV: {human_output_path}")
     return 0
 
 
@@ -425,6 +659,7 @@ def main() -> int:
 
     input_path = Path(args.input)
     output_path = Path(args.output) if args.output else default_output_path()
+    human_output_path = Path(args.human_output) if args.human_output else default_human_output_path(output_path)
 
     if args.today:
         today = datetime.strptime(args.today, "%Y-%m-%d").date()
@@ -435,7 +670,12 @@ def main() -> int:
         print(f"Input file not found: {input_path}")
         return 1
 
-    return run_parse_mode(input_path=input_path, output_path=output_path, today=today)
+    return run_parse_mode(
+        input_path=input_path,
+        output_path=output_path,
+        human_output_path=human_output_path,
+        today=today,
+    )
 
 
 if __name__ == "__main__":
