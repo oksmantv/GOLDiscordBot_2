@@ -1001,43 +1001,58 @@ class MissionPollCommands(commands.Cog):
             text = re.sub(r"\s+", " ", text).strip()
             return text
 
-        counts_by_creator: dict[str, int] = {}
-        mission_total = 0
+        unique_missions_by_creator: dict[str, set[str]] = {}
+        mission_rows_considered = 0
         unnamed_creator_rows = 0
+        unnamed_mission_rows = 0
         non_thu_sun_missions = 0
 
         for event in events:
             if event.type != "Mission":
                 continue
-            if not (event.name or "").strip():
+            mission_name = (event.name or "").strip()
+            if not mission_name:
+                unnamed_mission_rows += 1
                 continue
-            if (event.name or "").strip().upper() == "EVENT CANCELLED":
+            if mission_name.upper() == "EVENT CANCELLED":
                 continue
 
             if not event.date or event.date.weekday() not in (3, 6):  # Thursday/Sunday
                 non_thu_sun_missions += 1
                 continue
 
-            mission_total += 1
+            mission_rows_considered += 1
             creator_name = _normalize_creator_name(getattr(event, "creator_name", ""))
             if not creator_name:
                 unnamed_creator_rows += 1
                 continue
-            counts_by_creator[creator_name] = counts_by_creator.get(creator_name, 0) + 1
+
+            normalized_mission_name = normalize_mission_title(mission_name, strip_event_wrapper=True)
+            if not normalized_mission_name:
+                normalized_mission_name = mission_name.casefold()
+
+            if creator_name not in unique_missions_by_creator:
+                unique_missions_by_creator[creator_name] = set()
+            unique_missions_by_creator[creator_name].add(normalized_mission_name)
 
         lines: list[str] = []
         sorted_creators = sorted(
-            counts_by_creator.items(),
-            key=lambda item: (-item[1], item[0].casefold()),
+            unique_missions_by_creator.items(),
+            key=lambda item: (-len(item[1]), item[0].casefold()),
         )
-        for creator_name, count in sorted_creators:
+        for creator_name, mission_names in sorted_creators:
             safe_name = discord.utils.escape_markdown(creator_name)
+            count = len(mission_names)
             lines.append(f"• **{count}** — {safe_name}")
 
+        unique_mission_total = sum(len(names) for names in unique_missions_by_creator.values())
+
         footer_text = (
-            f"Thursday/Sunday missions counted: {mission_total} • "
+            f"Thu/Sun mission rows considered: {mission_rows_considered} • "
+            f"Unique mission titles counted: {unique_mission_total} • "
             f"Unique creators: {len(sorted_creators)} • "
             f"Unnamed creator rows: {unnamed_creator_rows} • "
+            f"Unnamed mission rows: {unnamed_mission_rows} • "
             f"Non Thu/Sun missions skipped: {non_thu_sun_missions}"
         )
 
