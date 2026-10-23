@@ -734,26 +734,27 @@ class MissionPollCommands(commands.Cog):
         for thread in sorted_threads:
             thread_url = f"https://discord.com/channels/{guild.id}/{thread.id}"
             comp_tags = get_thread_composition_tags(thread)
-            tags_label = ", ".join(comp_tags) if comp_tags else "None"
+            mission_tags = [t for t in comp_tags if t.strip().lower() not in ("thursday", "sunday")]
+            tags_label = ", ".join(mission_tags)
             plays = int(play_data.thread_play_counts.get(thread.id, 0))
             last_played = play_data.thread_last_played.get(thread.id)
             last_played_text = last_played.isoformat() if last_played else "Never"
             post_date = thread.created_at.date().isoformat() if thread.created_at else "Unknown"
+            tail = f" | {tags_label}" if tags_label else ""
             thread_lines.append(
-                f"• [{thread.name}]({thread_url})\n"
-                f"  Plays: **{plays}** | Last played: {last_played_text} | "
-                f"Post date: {post_date} | Tags: {tags_label}"
+                f"• [{thread.name}]({thread_url}) | **{plays}** | Played: {last_played_text} | Posted: {post_date}{tail}"
             )
 
-        history_lines: list[str] = []
+        history_with_briefing_lines: list[str] = []
+        history_without_briefing_lines: list[str] = []
         for row in play_data.history_only:
             last_played_text = row.last_played.isoformat() if row.last_played else "Unknown"
             normalized_name = normalize_mission_title(row.name)
             outside_filter_thread = all_thread_norm_index.get(normalized_name)
-            link_hint = ""
+            line = f"• {row.name} | **{row.play_count}** | Played: {last_played_text}"
             if outside_filter_thread and all(t.id != outside_filter_thread.id for t in filtered_threads):
                 outside_url = f"https://discord.com/channels/{guild.id}/{outside_filter_thread.id}"
-                link_hint = f" | Briefing outside filter: [link]({outside_url})"
+                history_with_briefing_lines.append(f"{line} | Briefing: [link]({outside_url})")
             elif outside_filter_thread is None:
                 best_thread, score = find_best_matching_thread_for_history_name(
                     row.name,
@@ -763,15 +764,18 @@ class MissionPollCommands(commands.Cog):
                 if best_thread and all(t.id != best_thread.id for t in filtered_threads):
                     best_url = f"https://discord.com/channels/{guild.id}/{best_thread.id}"
                     score_label = f"{score:.2f}"
-                    link_hint = f" | Possible briefing outside filter ({score_label}): [link]({best_url})"
-            history_lines.append(
-                f"• {row.name}\n"
-                f"  Plays: **{row.play_count}** | Last played: {last_played_text}{link_hint}"
-            )
+                    history_with_briefing_lines.append(
+                        f"{line} | Possible briefing ({score_label}): [link]({best_url})"
+                    )
+                else:
+                    history_without_briefing_lines.append(line)
+            else:
+                history_without_briefing_lines.append(line)
 
         footer_text = (
             f"{framework} • Composition: {composition} • Exclusion weeks not applied • "
-            f"{len(sorted_threads)} briefings • {len(play_data.history_only)} history-only names"
+            f"{len(sorted_threads)} briefings • {len(history_with_briefing_lines)} history names with briefing • "
+            f"{len(history_without_briefing_lines)} history names without briefing"
         )
 
         def _paginate(lines: list[str], heading: str, color: discord.Color) -> list[discord.Embed]:
@@ -820,14 +824,19 @@ class MissionPollCommands(commands.Cog):
             heading="Mission Play Counts — Current Briefings",
             color=discord.Color.teal(),
         )
-        history_pages = _paginate(
-            history_lines,
-            heading="Mission Play Counts — No Current Briefing",
+        history_with_briefing_pages = _paginate(
+            history_with_briefing_lines,
+            heading="Mission Play Counts — Briefing Outside Current Filter",
             color=discord.Color.gold(),
+        )
+        history_without_briefing_pages = _paginate(
+            history_without_briefing_lines,
+            heading="Mission Play Counts — No Briefing Match Found",
+            color=discord.Color.dark_gold(),
         )
 
         first_message = None
-        for page in mission_pages + history_pages:
+        for page in mission_pages + history_with_briefing_pages + history_without_briefing_pages:
             first_message = await interaction.channel.send(embed=page)
 
         if first_message:
