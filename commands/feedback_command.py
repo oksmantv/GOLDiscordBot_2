@@ -342,6 +342,14 @@ class FeedbackCommands(commands.Cog):
             )
             return
 
+        events_channel_id = config.get("events_channel_id")
+        if not events_channel_id:
+            await interaction.followup.send(
+                "❌ No Raid-Helper events channel configured. Run `/configureevents` first.",
+                ephemeral=True,
+            )
+            return
+
         briefing_channel_id = config["briefing_channel_id"]
         forum_channel = guild.get_channel(briefing_channel_id)
         if not forum_channel or forum_channel.type != discord.ChannelType.forum:
@@ -379,7 +387,9 @@ class FeedbackCommands(commands.Cog):
                     and training_event_only.name.strip()
                     and training_event_only.name.strip().upper() != "EVENT CANCELLED"
                 ):
-                    event_id = await raid_helper_service.find_event_id_by_date(guild.id, target_date)
+                    event_id = await raid_helper_service.find_event_id_by_date(
+                        guild.id, target_date, channel_id=events_channel_id
+                    )
                     if not event_id:
                         await interaction.followup.send(
                             f"❌ No Raid-Helper event found for {target_date.strftime('%A %d-%m-%Y')}.",
@@ -417,7 +427,9 @@ class FeedbackCommands(commands.Cog):
 
         # ── Handle cancelled events ──
         if mission_event.name.strip().upper() == "EVENT CANCELLED":
-            event_id = await raid_helper_service.find_event_id_by_date(guild.id, target_date)
+            event_id = await raid_helper_service.find_event_id_by_date(
+                guild.id, target_date, channel_id=events_channel_id
+            )
             if not event_id:
                 await interaction.followup.send(
                     f"❌ No Raid-Helper event found for {target_date.strftime('%A %d-%m-%Y')}.",
@@ -551,6 +563,7 @@ class FeedbackCommands(commands.Cog):
             server_id=guild.id,
             event_date=target_date,
             briefing_thread=briefing_thread,
+            event_channel_id=events_channel_id,
             training_name=training_name,
             instructor_name=instructor_name,
         )

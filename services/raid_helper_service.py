@@ -82,18 +82,24 @@ class RaidHelperService:
             return []
 
     async def find_event_id_by_date(
-        self, server_id: int, event_date: date
+        self,
+        server_id: int,
+        event_date: date,
+        *,
+        channel_id: Optional[int] = None,
     ) -> Optional[int]:
-        """Find the Raid-Helper event ID (message ID) for a given date.
+        """Find one Raid-Helper event ID for a date and optional channel.
 
-        Queries the server events list and matches by startTime falling on
-        the requested date (in UK timezone).
-        Returns the event/message ID or None.
+        ``channel_id`` must be the configured channel where Raid-Helper posts
+        scheduled events.  When it is omitted, a date match is accepted only
+        if it is unique.  This prevents a same-day event in another channel
+        from being modified merely because it appears first in the API result.
         """
         events = await self.get_server_events(server_id)
         if not events:
             return None
 
+        matches = []
         for ev in events:
             start_time = ev.get("startTime")
             if not start_time:
@@ -106,16 +112,41 @@ class RaidHelperService:
             except (ValueError, TypeError, OSError):
                 continue
 
-            if ev_date_uk == event_date:
-                event_id = ev.get("id")
-                if event_id:
-                    logger.info(
-                        f"Matched Raid-Helper event {event_id} "
-                        f"('{ev.get('title', '?')}') for date {event_date}"
-                    )
-                    return int(event_id)
+            if ev_date_uk != event_date:
+                continue
 
-        logger.warning(f"No Raid-Helper event found for date {event_date}")
+            if channel_id is not None:
+                try:
+                    if int(ev.get("channelId")) != int(channel_id):
+                        continue
+                except (ValueError, TypeError):
+                    continue
+
+            if ev.get("id"):
+                matches.append(ev)
+
+        if len(matches) == 1:
+            event_id = int(matches[0]["id"])
+            logger.info(
+                "Matched Raid-Helper event %s ('%s') for date %s in channel %s",
+                event_id,
+                matches[0].get("title", "?"),
+                event_date,
+                channel_id if channel_id is not None else matches[0].get("channelId"),
+            )
+            return event_id
+
+        if len(matches) > 1:
+            logger.error(
+                "Refusing to select a Raid-Helper event for date %s: %d matches%s",
+                event_date,
+                len(matches),
+                f" in channel {channel_id}" if channel_id is not None else "",
+            )
+            return None
+
+        channel_note = f" in channel {channel_id}" if channel_id is not None else ""
+        logger.warning(f"No Raid-Helper event found for date {event_date}{channel_note}")
         return None
 
     # ── Single event detail (v2, public, no auth) ─────────────────────
@@ -360,6 +391,7 @@ class RaidHelperService:
         event_date: date,
         briefing_thread: discord.Thread,
         *,
+        event_channel_id: int,
         training_name: str = "",
         instructor_name: str = "",
     ) -> str:
@@ -376,15 +408,18 @@ class RaidHelperService:
             server_id: Discord guild/server ID.
             event_date: The event date.
             briefing_thread: The mission briefing forum thread.
+            event_channel_id: Configured channel where Raid-Helper posts events.
             training_name: Training event name from schedule (Thursdays).
             instructor_name: Instructor name from schedule (Thursdays).
 
         Returns empty string on success, or a descriptive error message on failure.
         """
         # Find Raid-Helper event
-        event_id = await self.find_event_id_by_date(server_id, event_date)
+        event_id = await self.find_event_id_by_date(
+            server_id, event_date, channel_id=event_channel_id
+        )
         if not event_id:
-            msg = f"No Raid-Helper event found for {event_date}"
+            msg = f"No unique Raid-Helper event found for {event_date} in channel {event_channel_id}"
             logger.warning(msg)
             return msg
 

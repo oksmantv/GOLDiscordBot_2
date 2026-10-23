@@ -385,6 +385,18 @@ class MissionPollCommands(commands.Cog):
             await interaction.followup.send("❌ Event not found.", ephemeral=True)
             return
 
+        if target_event.guild_id != guild.id:
+            logger.warning(
+                "Rejected /missionpoll for event %s from guild %s in guild %s",
+                target_event.id,
+                target_event.guild_id,
+                guild.id,
+            )
+            await interaction.followup.send(
+                "❌ The selected event does not belong to this server.", ephemeral=True
+            )
+            return
+
         if target_event.name.strip():
             await interaction.followup.send(
                 f"❌ Event **{format_event_date(target_event.date)}** already has a mission assigned: "
@@ -1502,6 +1514,12 @@ class MissionPollCommands(commands.Cog):
         Sunday events are only updated when a mission is already pre-planned in
         the DB; otherwise they are skipped until the poll resolves.
         """
+        config = await schedule_config_repository.get_config(guild.id)
+        events_channel_id = config.get("events_channel_id") if config else None
+        if not events_channel_id:
+            logger.warning("RH init-update: no events channel configured")
+            return
+
         is_thursday = target_date.weekday() == 3
 
         # For Thursday events look up any training already in the DB.
@@ -1543,7 +1561,9 @@ class MissionPollCommands(commands.Cog):
             )
             return
 
-        event_id = await raid_helper_service.find_event_id_by_date(guild.id, target_date)
+        event_id = await raid_helper_service.find_event_id_by_date(
+            guild.id, target_date, channel_id=events_channel_id
+        )
         if not event_id:
             logger.warning(
                 "RH init-update: no Raid-Helper event found for %s "
@@ -1804,6 +1824,7 @@ class MissionPollCommands(commands.Cog):
                 server_id=guild.id,
                 event_date=target_event.date,
                 briefing_thread=thread,
+                event_channel_id=events_channel.id,
                 training_name=training_name,
                 instructor_name=instructor_name,
             )
@@ -2068,6 +2089,11 @@ class MissionPollCommands(commands.Cog):
             rh_updated = False
             if winning_thread:
                 try:
+                    config = await schedule_config_repository.get_config(guild.id)
+                    events_channel_id = config.get("events_channel_id") if config else None
+                    if not events_channel_id:
+                        raise RuntimeError("No Raid-Helper events channel is configured")
+
                     # Look up training info for Thursdays
                     training_name = ""
                     instructor_name = ""
@@ -2083,6 +2109,7 @@ class MissionPollCommands(commands.Cog):
                         server_id=guild.id,
                         event_date=target_event.date,
                         briefing_thread=winning_thread,
+                        event_channel_id=events_channel_id,
                         training_name=training_name,
                         instructor_name=instructor_name,
                     )
