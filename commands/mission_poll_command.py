@@ -32,6 +32,7 @@ from services.mission_play_count_service import (
     mission_play_count_service,
     normalize_mission_title,
     find_best_matching_thread_for_history_name,
+    canonicalize_history_name,
 )
 from services.training_play_count_service import training_play_count_service
 from services.schedule_config_repository import schedule_config_repository
@@ -730,51 +731,80 @@ class MissionPollCommands(commands.Cog):
             ),
         )
 
+        filtered_norm_index: dict[str, list[discord.Thread]] = {}
+        for thread in filtered_threads:
+            key = normalize_mission_title(thread.name or "")
+            if key:
+                filtered_norm_index.setdefault(key, []).append(thread)
+
+        recovered_counts: dict[int, int] = {}
+        recovered_last_played: dict[int, date] = {}
+        history_without_briefing_lines: list[str] = []
+        for row in play_data.history_only:
+            last_played_text = row.last_played.isoformat() if row.last_played else "Unknown"
+            canonical = canonicalize_history_name(row.name)
+            normalized_name = normalize_mission_title(canonical, strip_event_wrapper=True)
+
+            # If an exact normalized match exists inside the active filter, fold this
+            # history row back into the primary list rather than showing it as unmatched.
+            filtered_candidates = filtered_norm_index.get(normalized_name, [])
+            if filtered_candidates:
+                chosen = max(filtered_candidates, key=lambda t: _created_ts(t))
+                recovered_counts[chosen.id] = recovered_counts.get(chosen.id, 0) + row.play_count
+                if row.last_played:
+                    existing_last = recovered_last_played.get(chosen.id)
+                    if existing_last is None or row.last_played > existing_last:
+                        recovered_last_played[chosen.id] = row.last_played
+                continue
+
+            # If any briefing exists (outside current filter), do not list it as
+            # "no briefing" noise for this report.
+            outside_filter_thread = all_thread_norm_index.get(normalized_name)
+            if outside_filter_thread is not None:
+                continue
+
+            best_thread, _ = find_best_matching_thread_for_history_name(
+                row.name,
+                all_threads,
+                min_score=0.90,
+            )
+            if best_thread is not None:
+                continue
+
+            history_without_briefing_lines.append(
+                f"• **{row.play_count}** | Play: {last_played_text} | {row.name}"
+            )
+
         thread_lines: list[str] = []
         for thread in sorted_threads:
             thread_url = f"https://discord.com/channels/{guild.id}/{thread.id}"
             comp_tags = get_thread_composition_tags(thread)
             mission_tags = [t for t in comp_tags if t.strip().lower() not in ("thursday", "sunday")]
-            tags_label = ", ".join(mission_tags)
-            plays = int(play_data.thread_play_counts.get(thread.id, 0))
+            tag_abbrevs: list[str] = []
+            for tag in mission_tags:
+                abbrev = COMPOSITION_ABBREVIATIONS.get(tag.lower(), tag[:4].upper())
+                tag_abbrevs.append(abbrev)
+            tags_label = "/".join(tag_abbrevs)
+
+            base_plays = int(play_data.thread_play_counts.get(thread.id, 0))
+            extra_plays = int(recovered_counts.get(thread.id, 0))
+            plays = base_plays + extra_plays
+
             last_played = play_data.thread_last_played.get(thread.id)
+            recovered_last = recovered_last_played.get(thread.id)
+            if recovered_last and (last_played is None or recovered_last > last_played):
+                last_played = recovered_last
+
             last_played_text = last_played.isoformat() if last_played else "Never"
             post_date = thread.created_at.date().isoformat() if thread.created_at else "Unknown"
             tail = f" | {tags_label}" if tags_label else ""
             thread_lines.append(
-                f"• [{thread.name}]({thread_url}) | **{plays}** | Played: {last_played_text} | Posted: {post_date}{tail}"
+                f"• **{plays}** | Play: {last_played_text} | Post: {post_date} | [{thread.name}]({thread_url}){tail}"
             )
-
-        history_with_briefing_lines: list[str] = []
-        history_without_briefing_lines: list[str] = []
-        for row in play_data.history_only:
-            last_played_text = row.last_played.isoformat() if row.last_played else "Unknown"
-            normalized_name = normalize_mission_title(row.name)
-            outside_filter_thread = all_thread_norm_index.get(normalized_name)
-            line = f"• {row.name} | **{row.play_count}** | Played: {last_played_text}"
-            if outside_filter_thread and all(t.id != outside_filter_thread.id for t in filtered_threads):
-                outside_url = f"https://discord.com/channels/{guild.id}/{outside_filter_thread.id}"
-                history_with_briefing_lines.append(f"{line} | Briefing: [link]({outside_url})")
-            elif outside_filter_thread is None:
-                best_thread, score = find_best_matching_thread_for_history_name(
-                    row.name,
-                    all_threads,
-                    min_score=0.90,
-                )
-                if best_thread and all(t.id != best_thread.id for t in filtered_threads):
-                    best_url = f"https://discord.com/channels/{guild.id}/{best_thread.id}"
-                    score_label = f"{score:.2f}"
-                    history_with_briefing_lines.append(
-                        f"{line} | Possible briefing ({score_label}): [link]({best_url})"
-                    )
-                else:
-                    history_without_briefing_lines.append(line)
-            else:
-                history_without_briefing_lines.append(line)
 
         footer_text = (
             f"{framework} • Composition: {composition} • Exclusion weeks not applied • "
-            f"{len(sorted_threads)} briefings • {len(history_with_briefing_lines)} history names with briefing • "
+            f"{len(sorted_threads)} briefings • {len(recovered_counts)} reconciled history matches • "
             f"{len(history_without_briefing_lines)} history names without briefing"
         )
 
@@ -824,11 +854,6 @@ class MissionPollCommands(commands.Cog):
             heading="Mission Play Counts — Current Briefings",
             color=discord.Color.teal(),
         )
-        history_with_briefing_pages = _paginate(
-            history_with_briefing_lines,
-            heading="Mission Play Counts — Briefing Outside Current Filter",
-            color=discord.Color.gold(),
-        )
         history_without_briefing_pages = _paginate(
             history_without_briefing_lines,
             heading="Mission Play Counts — No Briefing Match Found",
@@ -836,7 +861,7 @@ class MissionPollCommands(commands.Cog):
         )
 
         first_message = None
-        for page in mission_pages + history_with_briefing_pages + history_without_briefing_pages:
+        for page in mission_pages + history_without_briefing_pages:
             first_message = await interaction.channel.send(embed=page)
 
         if first_message:
