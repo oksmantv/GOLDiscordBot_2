@@ -8,7 +8,6 @@ import re
 import time
 import logging
 import zoneinfo
-from collections import defaultdict
 
 from config import Config
 from services.forum_tag_service import forum_tag_service
@@ -994,36 +993,18 @@ class MissionPollCommands(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-
-        editors = [
-            m for m in guild.members
-            if any(r.name.strip().lower() == "editor" for r in getattr(m, "roles", []))
-        ]
-        if not editors:
-            await interaction.followup.send(
-                "❌ No members with the @Editor role were found.",
-                ephemeral=True,
-            )
-            return
-
         events = await event_repository.get_all_events_by_guild(guild.id)
 
-        def _clean_name(value: str) -> str:
-            text = (value or "").casefold()
+        def _normalize_creator_name(value: str) -> str:
+            text = (value or "").strip()
             text = re.sub(r"<a?:\w+:\d+>", " ", text)
-            text = re.sub(r"[^a-z0-9\s]", " ", text)
             text = re.sub(r"\s+", " ", text).strip()
             return text
 
-        editor_ids = {m.id for m in editors}
-
-        counts_by_editor: dict[int, int] = defaultdict(int)
-        unknown_creator_count = 0
-        direct_id_matches = 0
-        alias_fallback_matches = 0
+        counts_by_creator: dict[str, int] = {}
         mission_total = 0
-        unresolved_rows: list[tuple[int, str]] = []
-        verified_alias_to_editor_ids: dict[str, set[int]] = defaultdict(set)
+        unnamed_creator_rows = 0
+        non_thu_sun_missions = 0
 
         for event in events:
             if event.type != "Mission":
@@ -1033,59 +1014,36 @@ class MissionPollCommands(commands.Cog):
             if (event.name or "").strip().upper() == "EVENT CANCELLED":
                 continue
 
+            if not event.date or event.date.weekday() not in (3, 6):  # Thursday/Sunday
+                non_thu_sun_missions += 1
+                continue
+
             mission_total += 1
-
-            creator_id = int(getattr(event, "creator_id", 0) or 0)
-            creator_name = _clean_name(getattr(event, "creator_name", ""))
-
-            if creator_id in editor_ids:
-                counts_by_editor[creator_id] += 1
-                direct_id_matches += 1
-                if creator_name and len(creator_name) >= 3:
-                    verified_alias_to_editor_ids[creator_name].add(creator_id)
+            creator_name = _normalize_creator_name(getattr(event, "creator_name", ""))
+            if not creator_name:
+                unnamed_creator_rows += 1
                 continue
-
-            unresolved_rows.append((creator_id, creator_name))
-
-        # Fallback name attribution is only allowed for aliases observed on rows
-        # that already had a direct editor-ID match.
-        unique_verified_aliases: dict[str, int] = {
-            alias: next(iter(member_ids))
-            for alias, member_ids in verified_alias_to_editor_ids.items()
-            if len(member_ids) == 1
-        }
-
-        for creator_id, creator_name in unresolved_rows:
-            if creator_id != 0:
-                unknown_creator_count += 1
-                continue
-
-            matched_editor_id = unique_verified_aliases.get(creator_name)
-            if matched_editor_id is not None:
-                counts_by_editor[matched_editor_id] += 1
-                alias_fallback_matches += 1
-                continue
-
-            unknown_creator_count += 1
+            counts_by_creator[creator_name] = counts_by_creator.get(creator_name, 0) + 1
 
         lines: list[str] = []
-        editors_with_counts = [m for m in editors if counts_by_editor.get(m.id, 0) > 0]
-        for m in sorted(editors_with_counts, key=lambda e: (-counts_by_editor.get(e.id, 0), e.display_name.casefold())):
-            safe_name = discord.utils.escape_markdown(m.display_name)
-            lines.append(f"• **{counts_by_editor.get(m.id, 0)}** — {safe_name}")
+        sorted_creators = sorted(
+            counts_by_creator.items(),
+            key=lambda item: (-item[1], item[0].casefold()),
+        )
+        for creator_name, count in sorted_creators:
+            safe_name = discord.utils.escape_markdown(creator_name)
+            lines.append(f"• **{count}** — {safe_name}")
 
         footer_text = (
-            f"Mission events counted: {mission_total} • "
-            f"Matched to editors: {sum(counts_by_editor.values())} • "
-            f"Direct ID matches: {direct_id_matches} • "
-            f"Alias fallback matches: {alias_fallback_matches} • "
-            f"Unmatched creator rows: {unknown_creator_count} • "
-            f"Editors shown: {len(editors_with_counts)}/{len(editors)}"
+            f"Thursday/Sunday missions counted: {mission_total} • "
+            f"Unique creators: {len(sorted_creators)} • "
+            f"Unnamed creator rows: {unnamed_creator_rows} • "
+            f"Non Thu/Sun missions skipped: {non_thu_sun_missions}"
         )
 
         embed = discord.Embed(
-            title="Mission Counts by Editor",
-            description="\n".join(lines) if lines else "No matched editor mission rows.",
+            title="Mission Counts by Creator (Thu/Sun)",
+            description="\n".join(lines) if lines else "No Thursday/Sunday mission creators found.",
             color=discord.Color.blurple(),
         )
         embed.set_footer(text=footer_text)
