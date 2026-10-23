@@ -710,6 +710,14 @@ class MissionPollCommands(commands.Cog):
 
         play_data = await mission_play_count_service.get_play_data_for_threads(guild.id, filtered_threads)
 
+        def _fmt_short_date(value: Optional[date]) -> str:
+            if not value:
+                return "Never"
+            return value.strftime("%y%m%d")
+
+        def _display_name(value: str) -> str:
+            return re.sub(r"^(?:operation|op)\s+", "", value or "", flags=re.IGNORECASE).strip()
+
         # Build a lookup over all briefing threads so history-only rows can hint
         # when a thread exists outside the current framework/composition filter.
         all_thread_norm_index: dict[str, discord.Thread] = {}
@@ -773,7 +781,7 @@ class MissionPollCommands(commands.Cog):
                 continue
 
             history_without_briefing_lines.append(
-                f"• **{row.play_count}** | Play: {last_played_text} | {row.name}"
+                f"• **{row.play_count}** | Play: {_fmt_short_date(row.last_played)} | {_display_name(row.name)}"
             )
 
         thread_lines: list[str] = []
@@ -796,11 +804,13 @@ class MissionPollCommands(commands.Cog):
             if recovered_last and (last_played is None or recovered_last > last_played):
                 last_played = recovered_last
 
-            last_played_text = last_played.isoformat() if last_played else "Never"
-            post_date = thread.created_at.date().isoformat() if thread.created_at else "Unknown"
+            last_played_text = _fmt_short_date(last_played)
+            post_date = thread.created_at.date() if thread.created_at else None
+            post_date_text = _fmt_short_date(post_date)
+            display_name = _display_name(thread.name)
             tail = f" | {tags_label}" if tags_label else ""
             thread_lines.append(
-                f"• **{plays}** | Play: {last_played_text} | Post: {post_date} | [{thread.name}]({thread_url}){tail}"
+                f"• **{plays}** | Play: {last_played_text} | Post: {post_date_text} | [{display_name}]({thread_url}){tail}"
             )
 
         footer_text = (
