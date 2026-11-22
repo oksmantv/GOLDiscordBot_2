@@ -157,16 +157,20 @@ def get_feedback_template(event_date: date) -> str:
 
 
 async def build_mentions(
-    guild: discord.Guild, event_date: date
+    guild: discord.Guild,
+    event_date: date,
+    events_channel_id: Optional[int] = None,
 ) -> tuple[str, bool]:
     """Build the mentions string for the feedback post.
 
     Returns (mentions_string, used_raid_helper: bool).
-    Uses the Raid-Helper server API to find the event by date,
-    then fetches sign-ups. Falls back to mentioning the Leadership role.
+    Uses the Raid-Helper server API to find the event by date in the
+    configured events channel (so same-day events posted elsewhere, e.g.
+    Sunday editing sessions, are ignored), then fetches sign-ups.
+    Falls back to mentioning the Leadership role.
     """
     user_ids = await raid_helper_service.get_signup_user_ids_by_date(
-        guild.id, event_date
+        guild.id, event_date, channel_id=events_channel_id
     )
 
     if user_ids:
@@ -296,7 +300,13 @@ async def create_feedback_thread(
     template = get_feedback_template(event_date)
 
     # Build mentions (Raid-Helper or fallback)
-    mentions, used_rh = await build_mentions(guild, event_date)
+    events_channel_id = config.get("events_channel_id")
+    if not events_channel_id:
+        logger.warning(
+            "[Feedback] No events_channel_id configured — Raid-Helper lookup is "
+            "date-only and will fail if several events share the date. Run /configureevents."
+        )
+    mentions, used_rh = await build_mentions(guild, event_date, events_channel_id)
 
     # Compose the full message content
     content = f"{mentions}\n\n{template}"

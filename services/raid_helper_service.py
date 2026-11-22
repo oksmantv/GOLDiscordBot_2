@@ -228,10 +228,16 @@ class RaidHelperService:
         return user_ids
 
     async def get_signup_user_ids_by_date(
-        self, server_id: int, event_date: date
+        self,
+        server_id: int,
+        event_date: date,
+        *,
+        channel_id: Optional[int] = None,
     ) -> list[int]:
-        """Convenience: find event by date then return sign-up user IDs."""
-        event_id = await self.find_event_id_by_date(server_id, event_date)
+        """Convenience: find event by date (and channel) then return sign-up user IDs."""
+        event_id = await self.find_event_id_by_date(
+            server_id, event_date, channel_id=channel_id
+        )
         if not event_id:
             return []
         return await self.get_signup_user_ids(event_id)

@@ -44,11 +44,16 @@ def format_event_date(event_date: date) -> str:
     return f"{day_name} {day_ord} {month_name}"
 
 
+def split_frameworks(framework: str) -> list[str]:
+    """Split 'Framework 3.0 + Framework 4.0' into its individual tag names."""
+    return [part.strip() for part in framework.split("+") if part.strip()]
+
+
 def abbreviate_framework(tag_name: str) -> str:
-    """Convert 'Framework 3.0' -> 'FW 3.0'."""
-    match = re.match(r'Framework\s+(\d+\.\d+)', tag_name, re.IGNORECASE)
-    if match:
-        return f"FW {match.group(1)}"
+    """Convert 'Framework 3.0' -> 'FW 3.0' and 'Framework 3.0 + Framework 4.0' -> 'FW 3.0/4.0'."""
+    versions = re.findall(r'Framework\s+(\d+\.\d+)', tag_name, re.IGNORECASE)
+    if versions:
+        return f"FW {'/'.join(versions)}"
     return tag_name
 
 
@@ -163,14 +168,19 @@ def filter_threads_by_tags(
     framework: str,
     composition: str = "All",
 ) -> list[discord.Thread]:
-    """Filter threads by framework tag and optionally composition tag."""
+    """Filter threads by framework tag(s) and optionally composition tag.
+
+    ``framework`` may combine several tags with '+', in which case a thread
+    matches if it has any of them.
+    """
+    wanted_frameworks = {f.lower() for f in split_frameworks(framework)}
     filtered = []
     for thread in threads:
         tags = get_thread_tags(thread)
         tag_names_lower = [t.lower() for t in tags]
 
-        # Must have the framework tag
-        if framework.lower() not in tag_names_lower:
+        # Must have at least one of the framework tags
+        if not wanted_frameworks.intersection(tag_names_lower):
             continue
 
         # If composition filter is not "All", must have that composition tag

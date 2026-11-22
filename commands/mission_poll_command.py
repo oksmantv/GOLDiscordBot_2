@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 _SWEDISH_TZ = zoneinfo.ZoneInfo("Europe/Stockholm")
 
 # ─── Auto-poll default settings ───────────────────────────────────
-_AUTO_POLL_FRAMEWORK = "Framework 3.0"
+_AUTO_POLL_FRAMEWORK = "Framework 3.0 + Framework 4.0"
 _AUTO_POLL_DURATION_HOURS = 36
 _AUTO_POLL_OPTIONS = 5
 _AUTO_POLL_COMPOSITION = "All"
@@ -1299,9 +1299,22 @@ class MissionPollCommands(commands.Cog):
 
     @staticmethod
     def _filter_framework_choices(current: str) -> list[app_commands.Choice[str]]:
-        """Return framework choices from the already-populated tag cache."""
+        """Return framework choices from the already-populated tag cache.
+
+        When at least two framework tags exist, a combined option for the two
+        newest versions is offered first (e.g. 'Framework 3.0 + Framework 4.0').
+        """
+        tags = forum_tag_service.framework_tags
+        options = list(tags)
+        if len(tags) >= 2:
+            def _version(tag: str) -> tuple[int, ...]:
+                return tuple(int(p) for p in re.findall(r"\d+", tag))
+
+            newest_two = sorted(tags, key=_version)[-2:]
+            options.insert(0, " + ".join(newest_two))
+
         choices = []
-        for tag_name in forum_tag_service.framework_tags:
+        for tag_name in options:
             if current.lower() in tag_name.lower():
                 choices.append(app_commands.Choice(name=tag_name, value=tag_name))
         return choices[:25]

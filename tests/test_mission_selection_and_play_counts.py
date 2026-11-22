@@ -37,6 +37,27 @@ class MissionSelectionAndPlayCountTests(unittest.TestCase):
         random.seed(42)
         self.now = datetime.now(timezone.utc)
 
+    def test_combined_framework_filter_matches_either_tag(self):
+        threads = [
+            _Thread(1, "A", ["Framework 3.0", "Infantry"], self.now),
+            _Thread(2, "B", ["Framework 4.0"], self.now),
+            _Thread(3, "C", ["Framework 2.0"], self.now),
+        ]
+        filtered = mission_poll_service.filter_threads_by_tags(
+            threads, "Framework 3.0 + Framework 4.0"
+        )
+        self.assertEqual([t.id for t in filtered], [1, 2])
+
+        single = mission_poll_service.filter_threads_by_tags(threads, "Framework 4.0")
+        self.assertEqual([t.id for t in single], [2])
+
+    def test_abbreviate_combined_framework(self):
+        self.assertEqual(mission_poll_service.abbreviate_framework("Framework 3.0"), "FW 3.0")
+        self.assertEqual(
+            mission_poll_service.abbreviate_framework("Framework 3.0 + Framework 4.0"),
+            "FW 3.0/4.0",
+        )
+
     def test_unplayed_ranked_before_played_inside_day_pool(self):
         a = _Thread(1, "Operation Alpha", ["Thursday"], self.now - timedelta(days=3))
         b = _Thread(2, "Operation Bravo", ["Thursday"], self.now - timedelta(days=2))
