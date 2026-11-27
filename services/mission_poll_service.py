@@ -2,6 +2,7 @@ import discord
 import re
 import random
 import logging
+from dataclasses import dataclass
 from datetime import datetime, date, timedelta, timezone
 from typing import Optional
 from .forum_tag_service import forum_tag_service, FRAMEWORK_TAG_PATTERN
@@ -197,6 +198,117 @@ def filter_threads_by_tags(
     return filtered
 
 
+@dataclass
+class SelectionCandidate:
+    """One mission's position in the ranked selection, with the inputs that decided it."""
+    thread: discord.Thread
+    in_day_pool: bool
+    plays: int
+    poll_appearances: int
+    is_new: bool
+    key: tuple
+    rank: int = 0
+    selected: bool = False
+    tie_group_size: int = 1
+    tie_group_selected: int = 0
+
+    @property
+    def exposure(self) -> int:
+        return self.plays + self.poll_appearances
+
+
+def rank_candidates(
+    threads: list[discord.Thread],
+    count: int,
+    day_tag: Optional[str] = None,
+    play_counts: Optional[dict[int, int]] = None,
+    poll_appearances: Optional[dict[int, int]] = None,
+) -> list[SelectionCandidate]:
+    """Rank every thread and mark the first *count* as selected.
+
+    Sort key (lower wins):
+    1) day-tagged pool before the rest (only when day_tag is set)
+    2) lower exposure = total plays + recent poll appearances
+    3) briefings posted within NEW_BRIEFING_DAYS before older ones
+    Threads with an identical key are shuffled randomly.
+    """
+    play_counts = play_counts or {}
+    poll_appearances = poll_appearances or {}
+    day_lower = day_tag.lower() if day_tag else None
+    new_cutoff = datetime.now(timezone.utc) - timedelta(days=NEW_BRIEFING_DAYS)
+
+    grouped: dict[tuple, list[SelectionCandidate]] = {}
+    for thread in threads:
+        in_day_pool = bool(day_lower) and day_lower in [t.lower() for t in get_thread_tags(thread)]
+        plays = int(play_counts.get(thread.id, 0))
+        appearances = int(poll_appearances.get(thread.id, 0))
+        is_new = bool(thread.created_at and thread.created_at >= new_cutoff)
+        key = (0 if in_day_pool else 1, plays + appearances, 0 if is_new else 1)
+        candidate = SelectionCandidate(thread, in_day_pool, plays, appearances, is_new, key)
+        grouped.setdefault(key, []).append(candidate)
+
+    ranked: list[SelectionCandidate] = []
+    for key in sorted(grouped.keys()):
+        tie_group = grouped[key]
+        random.shuffle(tie_group)
+        ranked.extend(tie_group)
+
+    for idx, candidate in enumerate(ranked):
+        candidate.rank = idx + 1
+        candidate.selected = idx < count
+
+    for tie_group in grouped.values():
+        selected_in_group = sum(1 for c in tie_group if c.selected)
+        for candidate in tie_group:
+            candidate.tie_group_size = len(tie_group)
+            candidate.tie_group_selected = selected_in_group
+
+    return ranked
+
+
+def explain_candidate(
+    candidate: SelectionCandidate,
+    ranked: list[SelectionCandidate],
+    count: int,
+    day_tag: Optional[str] = None,
+) -> str:
+    """Return a short human-readable reason why a candidate was or wasn't selected."""
+    if len(ranked) <= count:
+        return "All eligible missions fit in the poll"
+
+    if candidate.tie_group_size > 1 and 0 < candidate.tie_group_selected < candidate.tie_group_size:
+        outcome = "Won" if candidate.selected else "Lost"
+        return (
+            f"{outcome} random draw: {candidate.tie_group_selected} of {candidate.tie_group_size} "
+            f"tied missions got a slot"
+        )
+
+    # Compare against the mission on the other side of the cutoff.
+    other = ranked[count] if candidate.selected else ranked[count - 1]
+    day_label = day_tag or "day"
+    for idx, (mine, theirs) in enumerate(zip(candidate.key, other.key)):
+        if mine == theirs:
+            continue
+        if idx == 0:
+            return (
+                f"{day_label}-tagged missions fill slots first"
+                if candidate.selected
+                else f"Not {day_label}-tagged; tagged missions filled the slots"
+            )
+        if idx == 1:
+            return (
+                f"Lower exposure ({candidate.exposure} vs {other.exposure} for first excluded)"
+                if candidate.selected
+                else f"Higher exposure ({candidate.exposure} vs {other.exposure} at cutoff)"
+            )
+        return (
+            f"New briefing (<{NEW_BRIEFING_DAYS} days) beats older ones at same exposure"
+            if candidate.selected
+            else "Older briefing; newer ones at same exposure took the slots"
+        )
+    return "Selected" if candidate.selected else "Not selected"
+
+
 def select_with_day_priority(
     threads: list[discord.Thread],
     count: int,
@@ -206,66 +318,13 @@ def select_with_day_priority(
 ) -> tuple[list[discord.Thread], list[discord.Thread]]:
     """Select threads using day-priority, then lowest exposure, then random.
 
-    Exposure = total plays + recent poll appearances (losing polls counts too,
-    so missions that keep losing rotate out instead of reappearing forever).
-
-    Ranking inside each pool:
-    1) lower exposure first
-    2) if in rest pool and day_tag exists, missions with day_tag first
-    3) briefings posted within NEW_BRIEFING_DAYS first
-    4) random shuffle within each remaining tie group
+    See ``rank_candidates`` for the exact ranking.
     """
     if len(threads) <= count:
         return list(threads), []
 
-    play_counts = play_counts or {}
-    poll_appearances = poll_appearances or {}
-    day_lower = day_tag.lower() if day_tag else None
-    new_cutoff = datetime.now(timezone.utc) - timedelta(days=NEW_BRIEFING_DAYS)
-
-    def has_day(thread: discord.Thread) -> bool:
-        if not day_lower:
-            return False
-        return day_lower in [tag.lower() for tag in get_thread_tags(thread)]
-
-    def is_new(thread: discord.Thread) -> bool:
-        return bool(thread.created_at and thread.created_at >= new_cutoff)
-
-    def rank_pool(pool: list[discord.Thread], prefer_day_tag_within_pool: bool) -> list[discord.Thread]:
-        grouped: dict[tuple, list[discord.Thread]] = {}
-        for thread in pool:
-            exposure = int(play_counts.get(thread.id, 0)) + int(poll_appearances.get(thread.id, 0))
-            key = (
-                exposure,
-                0 if (prefer_day_tag_within_pool and has_day(thread)) else 1,
-                0 if is_new(thread) else 1,
-            )
-            grouped.setdefault(key, []).append(thread)
-
-        ranked: list[discord.Thread] = []
-        for key in sorted(grouped.keys()):
-            tie_group = grouped[key]
-            random.shuffle(tie_group)
-            ranked.extend(tie_group)
-        return ranked
-
-    if day_lower:
-        priority = [thread for thread in threads if has_day(thread)]
-        rest = [thread for thread in threads if not has_day(thread)]
-    else:
-        priority = []
-        rest = list(threads)
-
-    selected: list[discord.Thread] = []
-    if priority:
-        ranked_priority = rank_pool(priority, prefer_day_tag_within_pool=False)
-        selected.extend(ranked_priority[:count])
-
-    if len(selected) < count:
-        needed = count - len(selected)
-        ranked_rest = rank_pool(rest, prefer_day_tag_within_pool=bool(day_lower))
-        selected.extend(ranked_rest[:needed])
-
+    ranked = rank_candidates(threads, count, day_tag, play_counts, poll_appearances)
+    selected = [c.thread for c in ranked if c.selected]
     selected_ids = {thread.id for thread in selected}
     excluded = [thread for thread in threads if thread.id not in selected_ids]
     return selected, excluded

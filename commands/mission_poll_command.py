@@ -16,6 +16,9 @@ from services.mission_poll_service import (
     fetch_all_forum_threads,
     filter_threads_by_tags,
     select_with_day_priority,
+    rank_candidates,
+    explain_candidate,
+    NEW_BRIEFING_DAYS,
     get_excluded_thread_ids,
     get_thread_composition_tags,
     format_poll_answer,
@@ -496,7 +499,7 @@ class MissionPollCommands(commands.Cog):
 
         # ── Determine effective day-priority tag ──
         _DAY_MAP = {3: "Thursday", 6: "Sunday"}
-        if day is None:
+        if day is None or day.lower() == "auto":
             effective_day = _DAY_MAP.get(target_event.date.weekday())
         elif day.lower() == "none":
             effective_day = None
@@ -983,6 +986,249 @@ class MissionPollCommands(commands.Cog):
                 ephemeral=True,
             )
 
+    # ─── /missionpolldebug command ─────────────────────────────────────
+    @app_commands.guilds(Config.GUILD_ID)
+    @app_commands.command(
+        name="missionpolldebug",
+        description="Dry-run the mission poll selection and explain why each mission was picked",
+    )
+    @app_commands.describe(
+        framework="Select the framework version to filter missions",
+        composition="Filter by composition type (default: All)",
+        options="Number of poll options to simulate (default: 5, min: 3, max: 10)",
+        exclusion_weeks="Weeks back for recently-played exclusion and poll appearances (default: 8)",
+        day="Day-priority tag to simulate (default: none)",
+        runs="Simulated polls for the odds table (default: 500, 0 to skip)",
+    )
+    async def missionpolldebug_command(
+        self,
+        interaction: discord.Interaction,
+        framework: str,
+        composition: str = "All",
+        options: app_commands.Range[int, 3, 10] = 5,
+        exclusion_weeks: int = 8,
+        day: Optional[str] = None,
+        runs: app_commands.Range[int, 0, 5000] = 500,
+    ):
+        """Dry-run the /missionpoll selection and post a human-readable explanation."""
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message(
+                "❌ This command can only be used in a server.", ephemeral=True
+            )
+            return
+
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            member = await guild.fetch_member(interaction.user.id)
+        is_admin = any(getattr(r.permissions, "administrator", False) for r in member.roles)
+        has_editor = any(r.name.strip().lower() == "editor" for r in member.roles)
+        if not (is_admin or has_editor):
+            await interaction.response.send_message(
+                "❌ You must be an admin or have the @Editor role to use this command.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        if exclusion_weeks not in (2, 4, 6, 8):
+            await interaction.followup.send(
+                "❌ Exclusion weeks must be one of: 2, 4, 6, 8.", ephemeral=True
+            )
+            return
+
+        effective_day = None if not day or day.lower() == "none" else day
+
+        briefing_channel_id = await self._get_briefing_channel_id(guild.id)
+        if not briefing_channel_id:
+            await interaction.followup.send(
+                "❌ No briefing forum channel configured. Use `/configure` first.",
+                ephemeral=True,
+            )
+            return
+
+        await forum_tag_service.ensure_cache(guild, briefing_channel_id)
+        all_threads = await fetch_all_forum_threads(guild, briefing_channel_id)
+        filtered = filter_threads_by_tags(all_threads, framework, composition)
+        excluded_ids, _ = await get_excluded_thread_ids(guild.id, filtered, weeks=exclusion_weeks)
+        recently_played = [t for t in filtered if t.id in excluded_ids]
+        remaining = [t for t in filtered if t.id not in excluded_ids]
+
+        if not remaining:
+            await interaction.followup.send(
+                f"❌ No eligible missions. Scanned {len(all_threads)}, matched filter {len(filtered)}, "
+                f"removed as recently played {len(recently_played)}.",
+                ephemeral=True,
+            )
+            return
+
+        # Same inputs the real poll uses.
+        play_data = await mission_play_count_service.get_play_data_for_threads(guild.id, remaining)
+        appearance_since = datetime.now(timezone.utc) - timedelta(weeks=exclusion_weeks)
+        poll_appearances = await mission_poll_repository.get_poll_appearance_counts(guild.id, appearance_since)
+        play_counts = play_data.thread_play_counts
+
+        ranked = rank_candidates(remaining, options, effective_day, play_counts, poll_appearances)
+        selected = [c for c in ranked if c.selected]
+        has_cutoff = len(ranked) > options
+
+        def _url(thread: discord.Thread) -> str:
+            return f"https://discord.com/channels/{guild.id}/{thread.id}"
+
+        def _short(value: Optional[date]) -> str:
+            return value.strftime("%y%m%d") if value else "Never"
+
+        def _details(c) -> str:
+            parts = []
+            if effective_day:
+                parts.append(f"{effective_day} pool" if c.in_day_pool else "Rest pool")
+            parts.append(f"Exp **{c.exposure}** ({c.plays} plays + {c.poll_appearances} polls)")
+            post = c.thread.created_at.date() if c.thread.created_at else None
+            parts.append(f"{'New' if c.is_new else 'Old'} (post {_short(post)})")
+            parts.append(f"last played {_short(play_data.thread_last_played.get(c.thread.id))}")
+            return " · ".join(parts)
+
+        # ── Summary page ──
+        day_pool_size = sum(1 for c in ranked if c.in_day_pool)
+        pool_note = (
+            f" ({effective_day} pool: {day_pool_size} · rest: {len(ranked) - day_pool_size})"
+            if effective_day else ""
+        )
+        rules = []
+        if effective_day:
+            rules.append(f"{effective_day}-tagged missions fill slots first")
+        rules.append(
+            f"Lowest exposure = total plays + non-winning poll appearances (last {exclusion_weeks} weeks)"
+        )
+        rules.append(f"Briefings posted in the last {NEW_BRIEFING_DAYS} days before older ones")
+        rules.append("Random draw among missions with identical values")
+
+        summary_lines = [
+            "**Dry run — no poll created, nothing saved.**",
+            "",
+            "**Settings**",
+            f"Framework: {framework} · Composition: {composition} · Options: {options}",
+            f"Exclusion: {exclusion_weeks} weeks · Day priority: {effective_day or 'None'}",
+            "",
+            "**Pipeline**",
+            f"• Briefings scanned: {len(all_threads)}",
+            f"• Matched framework/composition: {len(filtered)}",
+            f"• Removed, played in last {exclusion_weeks} weeks: {len(recently_played)}",
+            f"• Eligible: {len(remaining)}{pool_note}",
+            f"• Missions with recent poll appearances: "
+            f"{sum(1 for c in ranked if c.poll_appearances)} (polls since {appearance_since.date().isoformat()})",
+            "",
+            "**Ranking rules**",
+            *[f"{i}. {rule}" for i, rule in enumerate(rules, start=1)],
+            "",
+            "**Selected (this draw)**",
+        ]
+        for i, c in enumerate(selected, start=1):
+            summary_lines.append(
+                f"{i}. [{c.thread.name}]({_url(c.thread)}) — Exp {c.exposure} — "
+                f"{explain_candidate(c, ranked, options, effective_day)}"
+            )
+
+        summary_lines.append("")
+        summary_lines.append("**Cutoff**")
+        if len(remaining) == 1:
+            summary_lines.append("Only 1 eligible mission — the real poll would not be created.")
+        elif not has_cutoff:
+            summary_lines.append("All eligible missions fit, so no ranking is applied.")
+        else:
+            last_in, first_out = ranked[options - 1], ranked[options]
+            if last_in.key == first_out.key:
+                summary_lines.append(
+                    f"Tie at the cutoff: {last_in.tie_group_selected} of {last_in.tie_group_size} "
+                    f"missions with exposure {last_in.exposure} were drawn at random."
+                )
+            else:
+                summary_lines.append(
+                    f"Last selected exposure {last_in.exposure} · first excluded exposure {first_out.exposure}."
+                )
+
+        pages: list[discord.Embed] = [
+            discord.Embed(
+                title="Mission Poll Debug — Summary",
+                description="\n".join(summary_lines)[:4096],
+                color=discord.Color.blurple(),
+            )
+        ]
+
+        def _paginate(lines: list[str], heading: str, color: discord.Color) -> list[discord.Embed]:
+            result: list[discord.Embed] = []
+            chunk: list[str] = []
+            current_len = 0
+            for line in lines:
+                add_len = len(line) + 1
+                if chunk and current_len + add_len > 3800:
+                    result.append(discord.Embed(title=heading, description="\n".join(chunk), color=color))
+                    chunk, current_len = [], 0
+                chunk.append(line)
+                current_len += add_len
+            if chunk:
+                result.append(discord.Embed(title=heading, description="\n".join(chunk), color=color))
+            return result
+
+        # ── Full ranking pages ──
+        ranking_lines: list[str] = []
+        for c in ranked:
+            mark = "✅" if c.selected else "❌"
+            ranking_lines.append(
+                f"**#{c.rank}** {mark} [{c.thread.name}]({_url(c.thread)})\n"
+                f"{_details(c)}\n"
+                f"↳ {explain_candidate(c, ranked, options, effective_day)}"
+            )
+            if has_cutoff and c.rank == options:
+                ranking_lines.append("──────── **poll cutoff** ────────")
+        pages.extend(_paginate(ranking_lines, "Mission Poll Debug — Full Ranking", discord.Color.teal()))
+
+        # ── Recently played (excluded before ranking) ──
+        if recently_played:
+            recent_lines = [
+                f"Matched an event name in the last {exclusion_weeks} weeks, so never eligible:",
+                "",
+                *[f"• [{t.name}]({_url(t)})" for t in recently_played],
+            ]
+            pages.extend(_paginate(recent_lines, "Mission Poll Debug — Recently Played", discord.Color.greyple()))
+
+        # ── Odds simulation ──
+        if runs and has_cutoff:
+            hits = {c.thread.id: 0 for c in ranked}
+            for _ in range(runs):
+                for c in rank_candidates(remaining, options, effective_day, play_counts, poll_appearances):
+                    if c.selected:
+                        hits[c.thread.id] += 1
+
+            by_odds = sorted(ranked, key=lambda c: (-hits[c.thread.id], c.rank))
+            always = sum(1 for c in ranked if hits[c.thread.id] == runs)
+            never = sum(1 for c in ranked if hits[c.thread.id] == 0)
+            odds_lines = [
+                f"Chance to appear in the **next** poll, from {runs} simulated draws on the same data.",
+                f"Always: {always} · Sometimes: {len(ranked) - always - never} · Never: {never}",
+                "_Real polls shift these odds over time, since every poll adds appearances._",
+                "",
+            ]
+            for c in by_odds:
+                pct = 100.0 * hits[c.thread.id] / runs
+                odds_lines.append(
+                    f"• **{pct:.1f}%** [{c.thread.name}]({_url(c.thread)}) · Exp {c.exposure}"
+                )
+            pages.extend(_paginate(odds_lines, "Mission Poll Debug — Selection Odds", discord.Color.gold()))
+
+        total_pages = len(pages)
+        for idx, page in enumerate(pages, start=1):
+            page.set_footer(text=f"Dry run • {framework} • {composition} • Page {idx}/{total_pages}")
+
+        view = EmbedPaginationView(pages, owner_id=interaction.user.id)
+        message = await interaction.channel.send(embed=pages[0], view=view)
+        view.message = message
+        await interaction.followup.send(
+            f"✅ Posted mission poll debug report ({total_pages} pages) in {interaction.channel.mention}.",
+            ephemeral=True,
+        )
+
     @app_commands.guilds(Config.GUILD_ID)
     @app_commands.command(
         name="missioneditorcount",
@@ -1260,6 +1506,38 @@ class MissionPollCommands(commands.Cog):
         except Exception as e:
             logger.error(f"Missionplayedcount composition autocomplete error: {e}")
             return self._filter_composition_choices(current)
+
+    # ─── Autocomplete: missionpolldebug ──────────────────────────────────
+    @missionpolldebug_command.autocomplete("framework")
+    async def missionpolldebug_framework_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return await self.framework_autocomplete(interaction, current)
+
+    @missionpolldebug_command.autocomplete("composition")
+    async def missionpolldebug_composition_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        return await self.composition_autocomplete(interaction, current)
+
+    @missionpolldebug_command.autocomplete("exclusion_weeks")
+    async def missionpolldebug_exclusion_weeks_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[int]]:
+        return await self.exclusion_weeks_autocomplete(interaction, current)
+
+    @missionpolldebug_command.autocomplete("day")
+    async def missionpolldebug_day_autocomplete(
+        self, interaction: discord.Interaction, current: str
+    ) -> list[app_commands.Choice[str]]:
+        choices = [
+            app_commands.Choice(name="None — no day priority (default)", value="none"),
+            app_commands.Choice(name="Thursday — prioritise Thursday-tagged missions", value="Thursday"),
+            app_commands.Choice(name="Sunday — prioritise Sunday-tagged missions", value="Sunday"),
+        ]
+        if current:
+            return [c for c in choices if current.lower() in c.name.lower()]
+        return choices
 
     # ─── Autocomplete: missionlist exclusion_weeks ──────────────────────
     @missionlist_command.autocomplete("exclusion_weeks")

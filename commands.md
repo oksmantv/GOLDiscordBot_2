@@ -38,6 +38,7 @@ The GOL Discord Bot is an all-in-one management tool for a military simulation (
 | `/configureroster` | `channel` | Administrator | Setup |
 | `/missionpoll` | `framework` · `event` · `duration`? · `options`? · `composition`? · `exclusion_weeks`? | Admin or @Editor | Mission Polls |
 | `/missionplayedcount` | `framework` · `composition`? | Admin or @Editor | Mission Polls |
+| `/missionpolldebug` | `framework` · `composition`? · `options`? · `exclusion_weeks`? · `day`? · `runs`? | Admin or @Editor | Mission Polls |
 | `/trainingplayedcount` | — | Admin or @Editor | Mission Polls |
 | `/cancelpoll` | `poll` | Admin or @Editor | Mission Polls |
 | `/loa` | `start_date` · `end_date` · `reason`? | @Member | LOA |
@@ -343,6 +344,31 @@ Posts a public report of mission play history for the selected briefing filter.
 7. Sends an ephemeral confirmation to the command caller.
 
 No exclusion-weeks filter is applied in this command.
+
+---
+
+### `/missionpolldebug`
+
+**Category:** Mission Polling
+**Permission:** Administrator or `@Editor` role
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `framework` | string | ✅ | Framework version to filter briefings by (same autocomplete as `/missionpoll`) |
+| `composition` | string | ❌ | Composition type filter. Default: **"All"** |
+| `options` | integer | ❌ | Poll options to simulate (3–10). Default: **5** |
+| `exclusion_weeks` | integer | ❌ | 2 / 4 / 6 / 8. Default: **8** |
+| `day` | string | ❌ | `Thursday`, `Sunday`, or `none`. Default: **none** |
+| `runs` | integer | ❌ | Simulated draws for the odds table (0–5000). Default: **500** |
+
+**What it does:**
+Dry-runs the `/missionpoll` selection with the same inputs (exclusion, play counts, poll appearances) and posts a paginated report. No poll is created and nothing is saved.
+
+**Report pages:**
+1. **Summary** — settings, pipeline counts, ranking rules, the selected missions with reasons, and what happened at the cutoff.
+2. **Full Ranking** — every eligible mission with pool, exposure (plays + poll appearances), new/old, last played, and why it made or missed the cut.
+3. **Recently Played** — missions removed by the exclusion window.
+4. **Selection Odds** — chance of each mission appearing in the next poll over `runs` simulated draws.
 
 ---
 

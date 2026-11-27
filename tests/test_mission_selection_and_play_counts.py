@@ -117,6 +117,36 @@ class MissionSelectionAndPlayCountTests(unittest.TestCase):
             )
             self.assertEqual(selected[0].id, 2)
 
+    def test_explain_candidate_reasons(self):
+        old = self.now - timedelta(days=90)
+        threads = [
+            _Thread(1, "Op Tagged", ["Thursday"], old),
+            _Thread(2, "Op Low", [], old),
+            _Thread(3, "Op High", [], old),
+            _Thread(4, "Op TieA", [], old),
+            _Thread(5, "Op TieB", [], old),
+        ]
+        ranked = mission_poll_service.rank_candidates(
+            threads,
+            count=3,
+            day_tag="Thursday",
+            play_counts={2: 0, 3: 5, 4: 1, 5: 1},
+        )
+        by_id = {c.thread.id: c for c in ranked}
+
+        def reason(thread_id):
+            return mission_poll_service.explain_candidate(by_id[thread_id], ranked, 3, "Thursday")
+
+        self.assertEqual([c.thread.id for c in ranked[:2]], [1, 2])
+        self.assertIn("Thursday-tagged", reason(1))
+        self.assertIn("Lower exposure", reason(2))
+        self.assertIn("random draw", reason(4))
+        self.assertIn("random draw", reason(5))
+        self.assertIn("Higher exposure", reason(3))
+        self.assertFalse(by_id[3].selected)
+        self.assertEqual(by_id[4].tie_group_size, 2)
+        self.assertEqual(by_id[4].tie_group_selected, 1)
+
     def test_poll_appearances_and_plays_combine_into_exposure(self):
         polled = _Thread(1, "Operation Polled", ["Thursday"], self.now - timedelta(days=60))
         played = _Thread(2, "Operation Played", ["Thursday"], self.now - timedelta(days=60))
