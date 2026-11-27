@@ -111,13 +111,13 @@ Forum tags are split into two categories using a regex match against `^Framework
 
 ### Deduplication
 
-`get_excluded_thread_ids()` looks back N weeks (default 8) in the guild's `events` table. Any event with a non-empty `name` in that window is considered "recently played". Threads whose title matches a recent event name (case-insensitive exact match) are excluded from the pool.
+`get_excluded_thread_ids()` looks back N weeks (default 8) in the guild's `events` table. Any event with a non-empty `name` in that window is considered "recently played". Threads whose title matches a recent event name are excluded from the pool. Matching is case-insensitive exact, or normalized (wrappers like `Sunday Operation - `, `Replay - `, `[UNPLAYED]` and `Operation`/`Op` prefixes removed). No fuzzy matching.
 
 ---
 
 ## 5. Day-Priority Selection
 
-`select_with_day_priority(threads, count, day_tag, play_counts)` is called after deduplication whenever the pool is larger than the requested option count.
+`select_with_day_priority(threads, count, day_tag, play_counts, poll_appearances)` is called after deduplication whenever the pool is larger than the requested option count.
 
 ### How it works
 
@@ -126,10 +126,10 @@ Forum tags are split into two categories using a regex match against `^Framework
    - **Rest pool** — all other threads
 2. Slots are filled from the priority pool first (up to `count`).
 3. Inside each pool, ranking is:
-   - lower play count first (`0` first)
+   - lower exposure first — total plays + non-winning appearances in active/completed polls within the exclusion window, so missions that keep losing rotate out
    - then day tag preference inside the rest pool (if applicable)
-   - then newer `thread.created_at` first
-   - then random shuffle only for exact ties
+   - then briefings posted within the last 30 days (`NEW_BRIEFING_DAYS`)
+   - then random shuffle within each tie group
 4. Any remaining slots are filled from the rest pool using the same ranking.
 
 ```

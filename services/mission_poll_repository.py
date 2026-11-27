@@ -99,6 +99,33 @@ class MissionPollRepository:
         results = await db_connection.execute_query(query, guild_id)
         return [{"id": row[0], "winning_thread_id": row[1], "event_date": row[2]} for row in results]
 
+    async def get_poll_appearance_counts(self, guild_id: int, since: datetime) -> dict[int, int]:
+        """Count how often each thread appeared as a non-winning option in recent polls.
+
+        Only active and completed polls count (cancelled/failed polls are ignored).
+        The winner is skipped because its play is already counted via events.
+        """
+        query = """
+        SELECT mission_thread_ids, winning_thread_id
+        FROM mission_polls
+        WHERE guild_id = $1
+          AND status IN ('active', 'completed')
+          AND created_at >= $2;
+        """
+        results = await db_connection.execute_query(query, guild_id, since)
+        counts: dict[int, int] = {}
+        for row in results:
+            thread_ids = row[0]
+            if isinstance(thread_ids, str):
+                thread_ids = json.loads(thread_ids)
+            winner = row[1]
+            for thread_id in thread_ids or []:
+                thread_id = int(thread_id)
+                if winner is not None and thread_id == int(winner):
+                    continue
+                counts[thread_id] = counts.get(thread_id, 0) + 1
+        return counts
+
     async def mark_completed(self, poll_id: int, winning_thread_id: int):
         """Mark a poll as completed with the winning thread."""
         query = """

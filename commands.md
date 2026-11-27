@@ -296,7 +296,7 @@ Creates a Discord poll where members vote on which mission to play next. The bot
 
 4. **Selection:**
    - If more missions pass the filter than the `options` count, ranked selection is used.
-   - Rank order: day-priority pool first, then fewer total historical plays, then newer briefing posts, then random tie-break.
+   - Rank order: day-priority pool first, then lowest exposure (total historical plays + non-winning appearances in active/completed polls within `exclusion_weeks`), then briefings posted in the last 30 days, then random.
    - If **0 missions** pass the filter → sends a warning DM to the caller and logs to the log channel. No poll is created.
    - If **only 1 mission** passes → sends an error DM. No poll is created (not enough for a vote).
 

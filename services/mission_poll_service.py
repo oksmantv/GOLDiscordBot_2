@@ -8,8 +8,12 @@ from .forum_tag_service import forum_tag_service, FRAMEWORK_TAG_PATTERN
 from .mission_poll_repository import mission_poll_repository
 from .event_repository import event_repository
 from .log_channel_service import get_log_channel as shared_get_log_channel
+from .mission_play_count_service import canonicalize_history_name, normalize_mission_title
 
 logger = logging.getLogger(__name__)
+
+# Briefings posted within this many days count as "new" for tie-breaking.
+NEW_BRIEFING_DAYS = 30
 
 # Composition tag abbreviation mapping (used only when answer exceeds 55 chars)
 COMPOSITION_ABBREVIATIONS = {
@@ -198,38 +202,43 @@ def select_with_day_priority(
     count: int,
     day_tag: Optional[str] = None,
     play_counts: Optional[dict[int, int]] = None,
+    poll_appearances: Optional[dict[int, int]] = None,
 ) -> tuple[list[discord.Thread], list[discord.Thread]]:
-    """Select threads using day-priority, then lowest play count, then recency.
+    """Select threads using day-priority, then lowest exposure, then random.
+
+    Exposure = total plays + recent poll appearances (losing polls counts too,
+    so missions that keep losing rotate out instead of reappearing forever).
 
     Ranking inside each pool:
-    1) lower play count first
+    1) lower exposure first
     2) if in rest pool and day_tag exists, missions with day_tag first
-    3) newer thread.created_at first
-    4) random tie-break for exact ties
+    3) briefings posted within NEW_BRIEFING_DAYS first
+    4) random shuffle within each remaining tie group
     """
     if len(threads) <= count:
         return list(threads), []
 
     play_counts = play_counts or {}
+    poll_appearances = poll_appearances or {}
     day_lower = day_tag.lower() if day_tag else None
+    new_cutoff = datetime.now(timezone.utc) - timedelta(days=NEW_BRIEFING_DAYS)
 
     def has_day(thread: discord.Thread) -> bool:
         if not day_lower:
             return False
         return day_lower in [tag.lower() for tag in get_thread_tags(thread)]
 
-    def created_ts(thread: discord.Thread) -> float:
-        if thread.created_at:
-            return thread.created_at.timestamp()
-        return 0.0
+    def is_new(thread: discord.Thread) -> bool:
+        return bool(thread.created_at and thread.created_at >= new_cutoff)
 
     def rank_pool(pool: list[discord.Thread], prefer_day_tag_within_pool: bool) -> list[discord.Thread]:
         grouped: dict[tuple, list[discord.Thread]] = {}
         for thread in pool:
+            exposure = int(play_counts.get(thread.id, 0)) + int(poll_appearances.get(thread.id, 0))
             key = (
-                int(play_counts.get(thread.id, 0)),
+                exposure,
                 0 if (prefer_day_tag_within_pool and has_day(thread)) else 1,
-                -created_ts(thread),
+                0 if is_new(thread) else 1,
             )
             grouped.setdefault(key, []).append(thread)
 
@@ -269,6 +278,10 @@ async def get_excluded_thread_ids(guild_id: int, threads: list[discord.Thread], 
     Any event with a non-empty name in the lookback window means that mission
     was played/scheduled and should not appear in a new poll.
 
+    Matching is exact (case-insensitive) or normalized (event wrappers such as
+    'Sunday Operation - ', 'Replay - ', and 'Operation'/'Op' prefixes removed).
+    No fuzzy matching is used here.
+
     Returns:
         A tuple of (excluded_thread_ids, matched_event_names) for logging.
     """
@@ -278,9 +291,15 @@ async def get_excluded_thread_ids(guild_id: int, threads: list[discord.Thread], 
 
     # Collect non-empty event names from the lookback window
     recent_names = set()
+    recent_normalized = set()
     for ev in events:
         if ev.name and ev.name.strip():
             recent_names.add(ev.name.strip().lower())
+            normalized = normalize_mission_title(
+                canonicalize_history_name(ev.name), strip_event_wrapper=True
+            )
+            if normalized:
+                recent_normalized.add(normalized)
 
     if not recent_names:
         return set(), []
@@ -288,7 +307,10 @@ async def get_excluded_thread_ids(guild_id: int, threads: list[discord.Thread], 
     excluded = set()
     matched_names = []
     for thread in threads:
-        if thread.name.strip().lower() in recent_names:
+        if (
+            thread.name.strip().lower() in recent_names
+            or normalize_mission_title(thread.name) in recent_normalized
+        ):
             excluded.add(thread.id)
             matched_names.append(thread.name)
 

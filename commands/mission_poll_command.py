@@ -510,11 +510,15 @@ class MissionPollCommands(commands.Cog):
         excluded_from_poll = []
         if len(remaining) > options:
             play_data = await mission_play_count_service.get_play_data_for_threads(guild.id, remaining)
+            poll_appearances = await mission_poll_repository.get_poll_appearance_counts(
+                guild.id, datetime.now(timezone.utc) - timedelta(weeks=exclusion_weeks)
+            )
             selected, excluded_from_poll = select_with_day_priority(
                 remaining,
                 options,
                 effective_day,
                 play_counts=play_data.thread_play_counts,
+                poll_appearances=poll_appearances,
             )
             remaining = selected
 
@@ -527,8 +531,8 @@ class MissionPollCommands(commands.Cog):
                 description=(
                     f"**{len(excluded_from_poll) + options}** missions matched your filter, "
                     f"but you requested {options} options{day_note}.\n\n"
-                    f"Selection priority: day tag, then fewer total plays, then newer briefing post, "
-                    f"with random only for exact ties.\n\n"
+                    f"Selection priority: day tag, then fewest total plays + recent poll appearances "
+                    f"(last {exclusion_weeks} weeks), then new briefings, then random.\n\n"
                     f"**Selected:** {options} missions\n"
                     f"**Excluded:** {excluded_names}"
                 ),
@@ -1696,11 +1700,15 @@ class MissionPollCommands(commands.Cog):
         selected = remaining
         if len(remaining) > _AUTO_POLL_OPTIONS:
             play_data = await mission_play_count_service.get_play_data_for_threads(guild.id, remaining)
+            poll_appearances = await mission_poll_repository.get_poll_appearance_counts(
+                guild.id, datetime.now(timezone.utc) - timedelta(weeks=_AUTO_POLL_EXCLUSION_WEEKS)
+            )
             selected, _ = select_with_day_priority(
                 remaining,
                 _AUTO_POLL_OPTIONS,
                 day_tag,
                 play_counts=play_data.thread_play_counts,
+                poll_appearances=poll_appearances,
             )
             if day_tag:
                 logger.info(

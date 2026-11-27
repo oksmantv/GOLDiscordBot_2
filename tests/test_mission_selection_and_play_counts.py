@@ -80,14 +80,52 @@ class MissionSelectionAndPlayCountTests(unittest.TestCase):
         )
         self.assertEqual(selected[0].id, 1)
 
-    def test_equal_play_counts_prefer_newer_briefing(self):
-        older = _Thread(1, "Operation Older", ["Thursday"], self.now - timedelta(days=9))
+    def test_equal_play_counts_prefer_new_briefing(self):
+        older = _Thread(1, "Operation Older", ["Thursday"], self.now - timedelta(days=90))
         newer = _Thread(2, "Operation Newer", ["Thursday"], self.now - timedelta(days=2))
         selected, _ = select_with_day_priority(
             [older, newer],
             count=1,
             day_tag="Thursday",
             play_counts={1: 0, 2: 0},
+        )
+        self.assertEqual(selected[0].id, 2)
+
+    def test_distinct_timestamps_still_randomize(self):
+        threads = [
+            _Thread(i, f"Operation {i}", ["Thursday"], self.now - timedelta(days=60 + i, seconds=i))
+            for i in range(1, 9)
+        ]
+        observed = set()
+        for seed in range(20):
+            random.seed(seed)
+            selected, _ = select_with_day_priority(threads, count=3, day_tag="Thursday")
+            observed.add(tuple(sorted(t.id for t in selected)))
+        self.assertGreater(len(observed), 1)
+
+    def test_recent_poll_appearances_push_mission_down(self):
+        loser = _Thread(1, "Operation Loser", ["Thursday"], self.now - timedelta(days=60))
+        fresh = _Thread(2, "Operation Fresh", ["Thursday"], self.now - timedelta(days=60))
+        for seed in range(10):
+            random.seed(seed)
+            selected, _ = select_with_day_priority(
+                [loser, fresh],
+                count=1,
+                day_tag="Thursday",
+                play_counts={1: 0, 2: 0},
+                poll_appearances={1: 3},
+            )
+            self.assertEqual(selected[0].id, 2)
+
+    def test_poll_appearances_and_plays_combine_into_exposure(self):
+        polled = _Thread(1, "Operation Polled", ["Thursday"], self.now - timedelta(days=60))
+        played = _Thread(2, "Operation Played", ["Thursday"], self.now - timedelta(days=60))
+        selected, _ = select_with_day_priority(
+            [polled, played],
+            count=1,
+            day_tag="Thursday",
+            play_counts={1: 0, 2: 1},
+            poll_appearances={1: 2},
         )
         self.assertEqual(selected[0].id, 2)
 
@@ -155,9 +193,11 @@ class MissionSelectionAndPlayCountTests(unittest.TestCase):
             "Operation Petrakivskyi",
         )
 
-    def test_exclusion_weeks_gate_stays_exact_match(self):
+    def test_exclusion_weeks_gate_is_normalized_not_fuzzy(self):
         exact_thread = _Thread(10, "Operation Iron Dawn", ["Sunday"], self.now)
         fuzzy_thread = _Thread(11, "Sunday Operation - Iron Dawn", ["Sunday"], self.now)
+        short_thread = _Thread(12, "Op Steel Rain", ["Sunday"], self.now)
+        similar_thread = _Thread(13, "Operation Iron Dusk", ["Sunday"], self.now)
 
         class _Event(SimpleNamespace):
             pass
@@ -168,7 +208,7 @@ class MissionSelectionAndPlayCountTests(unittest.TestCase):
             try:
                 excluded, _ = await mission_poll_service.get_excluded_thread_ids(
                     1,
-                    [exact_thread, fuzzy_thread],
+                    [exact_thread, fuzzy_thread, short_thread, similar_thread],
                     weeks=8,
                 )
                 return excluded
@@ -176,13 +216,18 @@ class MissionSelectionAndPlayCountTests(unittest.TestCase):
                 mission_poll_service.event_repository.get_events_by_guild_and_date_range = original
 
         async def _fake_fetch(guild_id, start, end):
-            return [_Event(name="Operation Iron Dawn")]
+            return [
+                _Event(name="Operation Iron Dawn"),
+                _Event(name="Sunday Operation - Steel Rain"),
+            ]
 
         import asyncio
 
         excluded = asyncio.run(_run_check())
         self.assertIn(10, excluded)
         self.assertNotIn(11, excluded)
+        self.assertIn(12, excluded)
+        self.assertNotIn(13, excluded)
 
     def test_play_count_service_fallback_without_repo_helper(self):
         thread = _Thread(1, "Operation Dawn", ["Sunday"], self.now)
